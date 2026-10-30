@@ -4,11 +4,18 @@ from http.server import ThreadingHTTPServer
 from typing import Any
 
 from .events import EventLog
+from .github import TokenIssuer
 from .jsonhttp import HttpError, JsonHandler, post_json, require
 from .registry import Registry
 
 
-def make_server(host: str, port: int, registry: Registry, events: EventLog | None = None) -> ThreadingHTTPServer:
+def make_server(
+    host: str,
+    port: int,
+    registry: Registry,
+    events: EventLog | None = None,
+    github: TokenIssuer | None = None,
+) -> ThreadingHTTPServer:
     log = events if events is not None else EventLog()
 
     def box_for(team: str) -> str:
@@ -53,6 +60,14 @@ def make_server(host: str, port: int, registry: Registry, events: EventLog | Non
                     raise HttpError(400, "ids must be a list of event ids")
                 log.ack(ids)
                 return {"ok": True}
+            if method == "POST" and path == "/github-token":
+                if github is None:
+                    raise HttpError(404, "this arbiter issues no GitHub tokens; start it with --github-app")
+                # Only a registered box gets a token. The security groups keep
+                # anything else off the network; this keeps it off the token.
+                if self.client_address[0] not in registry.hosts():
+                    raise HttpError(403, f"{self.client_address[0]} isn't a registered box")
+                return github.token()
             raise HttpError(404, "not found")
 
     return ThreadingHTTPServer((host, port), Handler)

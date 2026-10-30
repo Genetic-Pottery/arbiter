@@ -17,7 +17,7 @@ you (Claude app) ── Remote Control ──> arbiter box ── Linear / Jira
                                           │  arbiter service :8700
                        security groups    │
                                           v
-                            worker boxes :8701 ── GitHub (GitHub App)
+                            worker boxes :8701 ── GitHub (tokens from the arbiter)
                             Claude on Bedrock (IAM role)
 ```
 
@@ -30,14 +30,17 @@ The arbiter box:
 - the warlock and arbiter plugins, installed by `arbiter-install`
 - Tailscale SSH for you, and no open ports except the arbiter service, which
   only worker boxes can reach
+- read access to the GitHub App's key in Secrets Manager. The arbiter service
+  copies the key into memory at start and issues worker boxes their tokens.
 
 Each worker box:
 
 - the box agent, serving the teams you list for it, with one clone of your
   project per team
 - Claude Code on Bedrock, through the box's IAM role, so no Claude login
-- a GitHub App installation token, minted from Secrets Manager and refreshed
-  every 40 minutes, so no GitHub login
+- an hour-long GitHub token from the arbiter, scoped to your project
+  repository and refreshed every 40 minutes, so no GitHub login and no key.
+  The box can't read the secret.
 - no person logs in. To look around, use Session Manager:
   `aws ssm start-session --target <instance id>`
 
@@ -84,7 +87,7 @@ Workers push branches and open pull requests as a GitHub App.
 
 1. In the Tailscale admin console, generate an auth key.
 2. Copy `terraform/arbiter/terraform.tfvars.example` to `terraform.tfvars`
-   and fill it in.
+   and fill it in, including the secret's ARN as `github_app_secret_arn`.
 3. Apply:
 
    ```sh
@@ -135,3 +138,8 @@ To change the fleet, edit `boxes` and apply again:
   configuration uses about 13 KB of it.
 - Boxes follow `arbiter_ref` and `warlock_ref` only when they're created.
   To update a box, replace it.
+- Workers depend on the arbiter for GitHub access. If the arbiter is down for
+  more than an hour, their tokens expire and their runs fail to push.
+- The arbiter gives a token to any address registered as a box, and any
+  machine in the worker security group can register. Keep that group to
+  worker boxes.

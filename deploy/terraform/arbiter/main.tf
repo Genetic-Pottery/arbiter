@@ -84,8 +84,9 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   description       = "All outbound"
 }
 
-# Session Manager only. The arbiter box reaches Claude and the trackers with
-# your claude.ai login, not AWS.
+# Session Manager, and the GitHub App key. The arbiter box reaches Claude and
+# the trackers with your claude.ai login, not AWS. It's the only box that can
+# read the key: worker boxes get hour-long tokens from the arbiter service.
 resource "aws_iam_role" "arbiter" {
   name = "${var.name}-arbiter"
   assume_role_policy = jsonencode({
@@ -101,6 +102,20 @@ resource "aws_iam_role" "arbiter" {
 resource "aws_iam_role_policy_attachment" "arbiter_ssm" {
   role       = aws_iam_role.arbiter.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_role_policy" "arbiter" {
+  name = "github-app-key"
+  role = aws_iam_role.arbiter.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "GitHubAppKey"
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = var.github_app_secret_arn
+    }]
+  })
 }
 
 resource "aws_iam_instance_profile" "arbiter" {
@@ -121,13 +136,15 @@ module "box" {
   tailscale_auth_key   = var.tailscale_auth_key
 
   box = {
-    git_user_name  = var.git_user_name
-    git_user_email = var.git_user_email
-    arbiter_repo   = var.arbiter_repo
-    arbiter_ref    = var.arbiter_ref
-    warlock_ref    = var.warlock_ref
-    project_repo   = var.project_repo
-    project_name   = element(split("/", var.project_repo), 1)
-    arbiter_port   = var.arbiter_port
+    git_user_name         = var.git_user_name
+    git_user_email        = var.git_user_email
+    arbiter_repo          = var.arbiter_repo
+    arbiter_ref           = var.arbiter_ref
+    warlock_ref           = var.warlock_ref
+    project_repo          = var.project_repo
+    project_name          = element(split("/", var.project_repo), 1)
+    arbiter_port          = var.arbiter_port
+    aws_region            = var.aws_region
+    github_app_secret_arn = var.github_app_secret_arn
   }
 }

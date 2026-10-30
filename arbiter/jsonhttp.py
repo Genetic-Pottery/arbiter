@@ -13,12 +13,14 @@ class HttpError(Exception):
         self.status = status
 
 
-def post_json(url: str, body: dict[str, Any], timeout: float = 600.0) -> dict[str, Any]:
+def post_json(
+    url: str, body: dict[str, Any], timeout: float = 600.0, headers: dict[str, str] | None = None
+) -> dict[str, Any]:
     """POSTs `body` as JSON and returns the decoded response. Raises HttpError on failure."""
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
         method="POST",
     )
     try:
@@ -26,7 +28,9 @@ def post_json(url: str, body: dict[str, Any], timeout: float = 600.0) -> dict[st
             return json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
         with e:
-            detail = json.loads(e.read() or b"{}").get("error", e.reason)
+            # Our services say "error"; GitHub says "message".
+            payload = json.loads(e.read() or b"{}")
+            detail = payload.get("error") or payload.get("message") or e.reason
         raise HttpError(e.code, detail) from None
     except urllib.error.URLError as e:
         raise HttpError(502, f"can't reach {url}: {e.reason}") from e

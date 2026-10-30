@@ -1,6 +1,7 @@
 # A worker box: the box agent and the team checkouts it works in. Nothing on
-# it needs a person. Claude runs on Bedrock through the instance's IAM role,
-# and GitHub access comes from a GitHub App whose key is in Secrets Manager.
+# it needs a person. Claude runs on Bedrock through the instance's IAM role.
+# GitHub access comes from the arbiter as hour-long tokens for the project
+# repository; the box never sees the GitHub App's key.
 {
   lib,
   pkgs,
@@ -46,41 +47,16 @@ let
     pkgs.git
     pkgs.gnugrep
     pkgs.jq
-    pkgs.openssl
     pkgs.python3
   ];
 
-  # Trades the GitHub App's private key for an installation token, which lasts
-  # an hour, and logs gh in with it. gh is also git's credential helper.
-  githubToken = pkgs.writeShellScript "github-token" ''
-    set -euo pipefail
-    export PATH=${claudeTools}:$PATH
-    secret=$(aws secretsmanager get-secret-value --region '${box.aws_region}' \
-      --secret-id '${box.github_app_secret_arn}' --query SecretString --output text)
-    app_id=$(jq -r .app_id <<<"$secret")
-    installation_id=$(jq -r .installation_id <<<"$secret")
-    key=$(mktemp)
-    trap 'rm -f "$key"' EXIT
-    jq -r .private_key <<<"$secret" > "$key"
-
-    b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-    now=$(date +%s)
-    header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
-    payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now - 60)) $((now + 540)) "$app_id" | b64url)
-    signature=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$key" | b64url)
-
-    token=$(curl -fsS -X POST \
-      -H "Authorization: Bearer $header.$payload.$signature" \
-      -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/app/installations/$installation_id/access_tokens" | jq -r .token)
-    gh auth login --with-token <<<"$token"
-  '';
-
-  # Clones what the box agent needs, then starts it with this box's teams.
+  # Clones arbiter and warlock, which are public, then starts the box agent.
+  # The agent gets a GitHub token from the arbiter, logs gh in with it (gh is
+  # git's credential helper), clones the project for each team, and refreshes
+  # the token every 40 minutes.
   boxStart = pkgs.writeShellScript "arbiter-box-start" ''
     set -euo pipefail
     export PATH=${claudeTools}:$PATH
-    ${githubToken}
 
     clone() { [ -d "$2/.git" ] || git clone --branch "$3" "$1" "$2"; }
     clone '${box.arbiter_repo}' ${arbiterCheckout} '${box.arbiter_ref}'
@@ -88,9 +64,7 @@ let
 
     teams=()
     for team in ${lib.escapeShellArgs box.teams}; do
-      dir='${home}/work/'"$team"
-      [ -d "$dir/.git" ] || gh repo clone '${box.project_repo}' "$dir"
-      teams+=(--team "$team=$dir")
+      teams+=(--team "$team=${home}/work/$team")
     done
 
     # The arbiter reaches this box at its private address.
@@ -105,6 +79,7 @@ let
       --advertise "http://$private_ip:${toString box.box_port}" \
       --state-dir /var/lib/arbiter-box/state \
       --warlock-cli ${warlockCheckout}/scripts/warlock.py \
+      --github-repo '${box.project_repo}' \
       --claude-args ${lib.escapeShellArg claudeArgs} \
       "''${teams[@]}"
   '';
@@ -139,25 +114,6 @@ in
       ExecStart = boxStart;
       Restart = "always";
       RestartSec = 30;
-    };
-  };
-
-  # An installation token lasts an hour. Refresh it well before then; runs
-  # already started pick up the new token through gh.
-  systemd.services.github-token = {
-    description = "Refresh the GitHub App token";
-    environment = claudeEnv;
-    serviceConfig = {
-      Type = "oneshot";
-      User = box.username;
-      ExecStart = githubToken;
-    };
-  };
-  systemd.timers.github-token = {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "40min";
-      OnUnitActiveSec = "40min";
     };
   };
 }

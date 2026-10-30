@@ -31,6 +31,11 @@ variable "project_repo" {
   }
 }
 
+variable "github_app_secret_arn" {
+  description = "Secrets Manager secret holding the GitHub App as JSON: app_id, installation_id, and private_key (the PEM text). Only the arbiter box can read it."
+  type        = string
+}
+
 # --- Optional ---------------------------------------------------------------
 
 variable "aws_region" {

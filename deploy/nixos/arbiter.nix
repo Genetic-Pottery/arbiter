@@ -103,25 +103,49 @@ in
     fi
   '';
 
-  # The registry and event log. Boxes reach it on the private network; the
-  # security group admits only worker boxes.
+  # The registry, the event log, and the boxes' GitHub tokens. Boxes reach it
+  # on the private network; the security group admits only worker boxes.
+  #
+  # The GitHub App's key is copied from Secrets Manager to /run/arbiter on
+  # every start: memory only, readable by this service's user, gone at stop.
   systemd.services.arbiter = {
     description = "arbiter service";
     wantedBy = [ "multi-user.target" ];
     wants = [ "network-online.target" ];
     after = [ "network-online.target" ];
-    path = [ pkgs.git ];
+    path = [
+      pkgs.awscli2
+      pkgs.git
+      pkgs.openssl
+    ];
     serviceConfig = {
       User = box.username;
       StateDirectory = "arbiter";
-      ExecStartPre = pkgs.writeShellScript "arbiter-checkout" ''
-        set -eu
-        if [ ! -d ${arbiterCheckout}/.git ]; then
-          git clone --branch '${box.arbiter_ref}' '${box.arbiter_repo}' ${arbiterCheckout}
-        fi
-      '';
+      RuntimeDirectory = "arbiter";
+      RuntimeDirectoryMode = "0700";
+      ExecStartPre = [
+        (pkgs.writeShellScript "arbiter-checkout" ''
+          set -eu
+          if [ ! -d ${arbiterCheckout}/.git ]; then
+            git clone --branch '${box.arbiter_ref}' '${box.arbiter_repo}' ${arbiterCheckout}
+          fi
+        '')
+        (pkgs.writeShellScript "arbiter-github-app" ''
+          set -eu
+          umask 077
+          aws secretsmanager get-secret-value --region '${box.aws_region}' \
+            --secret-id '${box.github_app_secret_arn}' --query SecretString --output text \
+            > /run/arbiter/github-app.json
+        '')
+      ];
       WorkingDirectory = arbiterCheckout;
-      ExecStart = "${pkgs.python3}/bin/python3 -m arbiter serve --host 0.0.0.0 --port ${toString box.arbiter_port} --events-file /var/lib/arbiter/events.jsonl";
+      ExecStart = lib.concatStringsSep " " [
+        "${pkgs.python3}/bin/python3 -m arbiter serve"
+        "--host 0.0.0.0 --port ${toString box.arbiter_port}"
+        "--events-file /var/lib/arbiter/events.jsonl"
+        "--github-app /run/arbiter/github-app.json"
+        "--github-repo ${box.project_repo}"
+      ];
       Restart = "always";
       RestartSec = 5;
     };

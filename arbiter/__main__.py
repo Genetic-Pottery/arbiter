@@ -10,6 +10,7 @@ from pathlib import Path
 from . import box as box_mod
 from . import server
 from .events import EventLog
+from .github import TokenIssuer
 from .jsonhttp import HttpError, get_json, post_json
 from .registry import Registry
 
@@ -20,10 +21,7 @@ def parse_team(value: str) -> tuple[str, Path]:
     team, sep, workdir = value.partition("=")
     if not sep or not team or not workdir:
         raise argparse.ArgumentTypeError("expected TEAM=WORKDIR")
-    path = Path(workdir).expanduser().resolve()
-    if not path.is_dir():
-        raise argparse.ArgumentTypeError(f"not a directory: {path}")
-    return team, path
+    return team, Path(workdir).expanduser().resolve()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,6 +33,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=8700)
     p.add_argument("--ttl", type=float, default=30.0, help="seconds before a silent box is dropped")
     p.add_argument("--events-file", type=Path, help="JSONL file that keeps unacked events across restarts")
+    p.add_argument(
+        "--github-app",
+        type=Path,
+        metavar="FILE",
+        help="JSON file with the GitHub App's app_id, installation_id, and private_key; boxes get tokens from it",
+    )
+    p.add_argument("--github-repo", metavar="OWNER/NAME", help="the one repository tokens reach; required with --github-app")
 
     p = sub.add_parser("box", help="run a box agent that works tickets for its teams")
     p.add_argument("--arbiter", default=DEFAULT_ARBITER)
@@ -46,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--claude-args", default="", help="extra flags for every claude run, as one string")
     p.add_argument("--state-dir", type=Path, help="where ticket payloads are written")
     p.add_argument("--warlock-cli", type=Path, help="path to Warlock's scripts/warlock.py; turns on scope checks")
+    p.add_argument(
+        "--github-repo",
+        metavar="OWNER/NAME",
+        help="get GitHub access from the arbiter, and clone this repository into missing team directories",
+    )
+    p.add_argument("--github-refresh", type=float, default=40 * 60, help="seconds between GitHub token refreshes")
 
     p = sub.add_parser("say", help="send a message through the arbiter")
     p.add_argument("--arbiter", default=DEFAULT_ARBITER)
@@ -62,11 +73,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "serve":
-        srv = server.make_server(args.host, args.port, Registry(ttl=args.ttl), EventLog(args.events_file))
+        if bool(args.github_app) != bool(args.github_repo):
+            parser.error("--github-app and --github-repo go together")
+        github = TokenIssuer.from_file(args.github_app, args.github_repo) if args.github_app else None
+        srv = server.make_server(args.host, args.port, Registry(ttl=args.ttl), EventLog(args.events_file), github)
         print(f"arbiter listening on http://{args.host}:{args.port}", file=sys.stderr)
         srv.serve_forever()
 
     elif args.cmd == "box":
+        if not args.github_repo:
+            for _, workdir in args.team:
+                if not workdir.is_dir():
+                    parser.error(f"not a directory: {workdir}")
         box = box_mod.Box(
             dict(args.team),
             args.arbiter,
@@ -81,6 +99,13 @@ def main(argv: list[str] | None = None) -> int:
             args=(url, box, args.heartbeat, threading.Event()),
             daemon=True,
         ).start()
+        if args.github_repo:
+            box.ready.clear()
+            threading.Thread(
+                target=box_mod.github_login,
+                args=(box, args.github_repo, args.github_refresh, threading.Event()),
+                daemon=True,
+            ).start()
         print(f"box serving {', '.join(box.sessions)} on {url}", file=sys.stderr)
         srv.serve_forever()
 

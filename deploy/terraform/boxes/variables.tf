@@ -30,11 +30,6 @@ variable "project_repo" {
   type        = string
 }
 
-variable "github_app_secret_arn" {
-  description = "Secrets Manager secret holding the GitHub App as JSON: app_id, installation_id, and private_key (the PEM text)."
-  type        = string
-}
-
 variable "git_user_name" {
   description = "Name on commits the boxes make, for example \"arbiter-bot\"."
   type        = string

@@ -1,4 +1,7 @@
+import base64
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,10 +17,12 @@ sys.path.insert(0, str(ROOT))
 from arbiter import box as box_mod  # noqa: E402
 from arbiter import server  # noqa: E402
 from arbiter.events import EventLog  # noqa: E402
-from arbiter.jsonhttp import HttpError, get_json, post_json  # noqa: E402
+from arbiter.github import PERMISSIONS, TokenIssuer  # noqa: E402
+from arbiter.jsonhttp import HttpError, JsonHandler, get_json, post_json  # noqa: E402
 from arbiter.registry import Registry  # noqa: E402
 
 FAKE_CLAUDE = [sys.executable, str(ROOT / "tests" / "fake_claude.py")]
+FAKE_GH = [sys.executable, str(ROOT / "tests" / "bin" / "gh")]
 MCP_SERVER = ROOT / "plugins" / "arbiter" / "scripts" / "arbiter_mcp.py"
 
 
@@ -96,6 +101,120 @@ class EventLogTest(unittest.TestCase):
             again = EventLog(path)
             self.assertEqual([e["type"] for e in again.pending()], ["done"])
             self.assertEqual(again.append("DB", "DB-1", "plan")["id"], 3)
+
+
+class FakeGitHub:
+    """Answers the installation token request the way GitHub does, and checks its signature."""
+
+    def __init__(self, public_key: Path, clock: "FakeClock") -> None:
+        self.requests: list[dict[str, Any]] = []
+        fake = self
+
+        class Handler(JsonHandler):
+            def route(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+                if method != "POST" or path != "/app/installations/42/access_tokens":
+                    raise HttpError(404, "not found")
+                jwt = self.headers["Authorization"].removeprefix("Bearer ")
+                signing_input, _, signature = jwt.rpartition(".")
+                with tempfile.NamedTemporaryFile() as sig:
+                    sig.write(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)))
+                    sig.flush()
+                    verify = subprocess.run(
+                        ["openssl", "dgst", "-sha256", "-verify", str(public_key), "-signature", sig.name],
+                        input=signing_input.encode(),
+                        capture_output=True,
+                    )
+                if verify.returncode != 0:
+                    raise HttpError(401, "bad signature")
+                claims = signing_input.split(".")[1]
+                fake.requests.append({"claims": json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4))), "body": body})
+                expires = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock.now + 3600))
+                return {"token": f"ghs_{len(fake.requests)}", "expires_at": expires}
+
+        self.server = server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+class GitHubTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        key, public = root / "app.pem", root / "app.pub"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-out", str(key)], check=True, capture_output=True)
+        subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout", "-out", str(public)], check=True, capture_output=True)
+        self.clock = FakeClock()
+        self.clock.now = time.time()
+        self.github = FakeGitHub(public, self.clock)
+        self.addCleanup(self.github.close)
+        self.issuer = TokenIssuer("7", "42", key.read_text(), "acme/shop", api_url=self.github.url, clock=self.clock)
+        self.addCleanup(self.issuer.close)
+
+    def start_arbiter(self) -> tuple[Registry, str]:
+        registry = Registry()
+        arbiter = server.make_server("127.0.0.1", 0, registry, github=self.issuer)
+        threading.Thread(target=arbiter.serve_forever, daemon=True).start()
+        self.addCleanup(arbiter.server_close)
+        self.addCleanup(arbiter.shutdown)
+        return registry, f"http://127.0.0.1:{arbiter.server_address[1]}"
+
+    def test_issuer_signs_as_the_app_and_scopes_to_the_repo(self) -> None:
+        self.assertEqual(self.issuer.token()["token"], "ghs_1")
+        (request,) = self.github.requests
+        self.assertEqual(request["claims"]["iss"], "7")
+        self.assertEqual(request["body"], {"repositories": ["shop"], "permissions": PERMISSIONS})
+
+    def test_issuer_reuses_a_token_until_it_nears_expiry(self) -> None:
+        self.issuer.token()
+        self.clock.now += 30 * 60
+        self.assertEqual(self.issuer.token()["token"], "ghs_1")
+        self.clock.now += 10 * 60
+        self.assertEqual(self.issuer.token()["token"], "ghs_2")
+
+    def test_arbiter_gives_tokens_only_to_registered_boxes(self) -> None:
+        registry, url = self.start_arbiter()
+        with self.assertRaises(HttpError) as ctx:
+            post_json(f"{url}/github-token", {})
+        self.assertEqual(ctx.exception.status, 403)
+        registry.register("DB", "http://127.0.0.1:9")
+        self.assertEqual(post_json(f"{url}/github-token", {})["token"], "ghs_1")
+
+    def test_arbiter_without_an_app_issues_nothing(self) -> None:
+        arbiter = server.make_server("127.0.0.1", 0, Registry())
+        threading.Thread(target=arbiter.serve_forever, daemon=True).start()
+        self.addCleanup(arbiter.server_close)
+        self.addCleanup(arbiter.shutdown)
+        with self.assertRaises(HttpError) as ctx:
+            post_json(f"http://127.0.0.1:{arbiter.server_address[1]}/github-token", {})
+        self.assertEqual(ctx.exception.status, 404)
+
+    def test_box_logs_in_clones_and_only_then_works(self) -> None:
+        registry, url = self.start_arbiter()
+        root = Path(self.tmp.name)
+        log = root / "gh.log"
+        os.environ["FAKE_GH_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FAKE_GH_LOG")
+        box = box_mod.Box({"DB": root / "work" / "DB"}, url, claude_cmd=FAKE_CLAUDE, state_dir=root / "state", gh_cmd=FAKE_GH)
+        box.ready.clear()
+        with self.assertRaises(HttpError) as ctx:
+            box.dispatch("DB", {"key": "DB-1"})
+        self.assertEqual(ctx.exception.status, 503)
+
+        stop = threading.Event()
+        stop.set()  # One round, no loop.
+        box_mod.heartbeat("http://127.0.0.1:9", box, 0, stop)
+        box_mod.github_login(box, "acme/shop", 0, stop)
+
+        self.assertTrue(box.ready.is_set())
+        self.assertTrue((root / "work" / "DB" / ".git").is_dir())
+        self.assertEqual(log.read_text().splitlines(), ["login ghs_1", f"clone acme/shop {root / 'work' / 'DB'}"])
+        self.assertEqual(registry.lookup("DB"), "http://127.0.0.1:9")
 
 
 class EndToEndTest(unittest.TestCase):

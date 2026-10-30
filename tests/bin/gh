@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
-"""Stands in for gh in tests: `gh pr list` prints the file at FAKE_GH_PRS."""
+"""Stands in for gh in tests.
+
+`gh pr list` prints the file at FAKE_GH_PRS. `gh auth login --with-token` and
+`gh repo clone REPO DIR` append what they were given to FAKE_GH_LOG, and clone
+makes DIR/.git.
+"""
 
 import os
 import sys
+from pathlib import Path
 
-if sys.argv[1:3] != ["pr", "list"]:
-    sys.exit(f"fake gh: unsupported: {sys.argv[1:]}")
-with open(os.environ["FAKE_GH_PRS"]) as f:
-    sys.stdout.write(f.read())
+args = sys.argv[1:]
+if args[:2] == ["pr", "list"]:
+    sys.stdout.write(Path(os.environ["FAKE_GH_PRS"]).read_text())
+elif args == ["auth", "login", "--with-token"]:
+    with open(os.environ["FAKE_GH_LOG"], "a") as log:
+        log.write(f"login {sys.stdin.read().strip()}\n")
+elif args[:2] == ["repo", "clone"] and len(args) == 4:
+    (Path(args[3]) / ".git").mkdir(parents=True)
+    with open(os.environ["FAKE_GH_LOG"], "a") as log:
+        log.write(f"clone {args[2]} {args[3]}\n")
+else:
+    sys.exit(f"fake gh: unsupported: {args}")

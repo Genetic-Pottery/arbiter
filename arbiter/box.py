@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -40,6 +41,7 @@ class Box:
         claude_args: list[str] | None = None,
         state_dir: Path | None = None,
         warlock_cli: Path | None = None,
+        gh_cmd: list[str] | None = None,
     ):
         self.sessions = {team: Session(team, workdir) for team, workdir in teams.items()}
         self.arbiter_url = arbiter_url
@@ -48,16 +50,23 @@ class Box:
         self.state_dir = state_dir or Path(tempfile.gettempdir()) / "arbiter-box"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.warlock_cli = warlock_cli
+        self.gh_cmd = gh_cmd or ["gh"]
+        # Set once the box can work: at once, or after github_login's first
+        # success when the arbiter issues the box's GitHub access.
+        self.ready = threading.Event()
+        self.ready.set()
 
     def _session(self, team: str) -> Session:
         session = self.sessions.get(team)
         if session is None:
             raise HttpError(404, f"this box doesn't serve team {team!r}")
+        if not self.ready.is_set():
+            raise HttpError(503, "this box is still getting GitHub access from the arbiter")
         return session
 
     def ticket(self, team: str) -> str | None:
         """Returns the ticket `team` is working, or None when it's idle."""
-        return self._session(team).ticket
+        return self.sessions[team].ticket
 
     def ask(self, team: str, speaker: str, text: str) -> str:
         session = self._session(team)
@@ -154,3 +163,33 @@ def heartbeat(box_url: str, box: Box, interval: float, stop: threading.Event) ->
                 pass  # The arbiter might be restarting; the next beat retries.
         if stop.wait(interval):
             return
+
+
+def github_login(box: Box, repo: str, interval: float, stop: threading.Event, retry: float = 10.0) -> None:
+    """Gets GitHub access from the arbiter, then repeats every `interval` seconds until `stop` is set.
+
+    Each round logs gh in with a fresh token from the arbiter, so gh and git
+    (which uses gh for credentials) pick it up, runs in progress included. The
+    first round also clones `repo` into each team's missing working directory,
+    then marks the box ready. The arbiter gives tokens only to registered boxes,
+    so a round can fail until the first heartbeat lands; it retries sooner then.
+    """
+    while True:
+        try:
+            token = post_json(f"{box.arbiter_url}/github-token", {}, timeout=60)["token"]
+            _run([*box.gh_cmd, "auth", "login", "--with-token"], stdin=token)
+            for session in box.sessions.values():
+                if not (session.workdir / ".git").exists():
+                    _run([*box.gh_cmd, "repo", "clone", repo, str(session.workdir)])
+            box.ready.set()
+            wait = interval
+        except (HttpError, OSError, subprocess.CalledProcessError) as e:
+            detail = e.stderr.strip() if isinstance(e, subprocess.CalledProcessError) else e
+            print(f"box: can't get GitHub access yet, retrying: {detail}", file=sys.stderr)
+            wait = min(retry, interval)
+        if stop.wait(wait):
+            return
+
+
+def _run(cmd: list[str], stdin: str | None = None) -> None:
+    subprocess.run(cmd, input=stdin, capture_output=True, text=True, check=True)

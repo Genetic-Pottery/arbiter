@@ -3,6 +3,7 @@
 import threading
 import time
 from typing import Callable
+from urllib.parse import urlsplit
 
 
 class Registry:
@@ -30,6 +31,10 @@ class Registry:
                 del self._entries[team]
                 return None
             return url
+
+    def hosts(self) -> set[str]:
+        """Returns the host of every live box, for telling boxes from other callers."""
+        return {urlsplit(info["url"]).hostname or "" for info in self.teams().values()}
 
     def teams(self) -> dict[str, dict[str, object]]:
         """Returns every live team with its box URL and the ticket it's working, if any."""

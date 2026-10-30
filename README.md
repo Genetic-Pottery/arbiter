@@ -125,6 +125,7 @@ The arbiter service listens on port 8700 by default.
 | `GET` | `/events` | | `{events: [...]}`, every unacked event, oldest first. |
 | `POST` | `/events/ack` | `{ids}` | `{ok}` |
 | `POST` | `/message` | `{team, speaker, text}` | `{team, reply}` from the team's own Claude session, or `409` while it works a ticket. |
+| `POST` | `/github-token` | `{}` | `{token, expires_at}`, a GitHub App installation token for the project repository. `403` unless the caller's address belongs to a registered box, and `404` unless the service runs with `--github-app`. |
 
 A box listens on port 8701 by default and accepts `POST /dispatch` and
 `POST /message`.
@@ -143,6 +144,24 @@ A box listens on port 8701 by default and accepts `POST /dispatch` and
   The default is `http://127.0.0.1:8700`.
 - `box --warlock-cli` sets the path of Warlock's `scripts/warlock.py`, which
   turns on scope checks in `/worker:work`.
+
+### GitHub access from the arbiter
+
+The arbiter can hold your GitHub App's private key and give boxes hour-long
+tokens, so no box holds a key or a login:
+
+- `serve --github-app FILE --github-repo OWNER/NAME` turns it on. `FILE` is
+  JSON with `app_id`, `installation_id`, and `private_key`. Tokens reach only
+  `OWNER/NAME`, with write access to contents and pull requests. The service
+  runs `openssl` to sign its requests to GitHub.
+- `box --github-repo OWNER/NAME` makes a box get its access from the arbiter.
+  Once its heartbeat registers it, the box logs `gh` in with a token, clones
+  `OWNER/NAME` into each team directory that's missing, and starts taking
+  work. It gets a new token every 40 minutes (`--github-refresh`), and `gh` and
+  git pick it up, runs in progress included. Until the first token arrives,
+  the box answers dispatches with `503`.
+- If the arbiter is down, boxes can't refresh, and their GitHub access ends
+  within the hour.
 
 ## Limits
 

@@ -1,7 +1,6 @@
-project_repo          = "Genetic-Pottery/warlock-test-repo"
-github_app_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:arbiter-github-app-AbCdEf"
-git_user_name         = "arbiter-bot"
-git_user_email        = "123456+arbiter-bot[bot]@users.noreply.github.com"
+project_repo   = "Genetic-Pottery/warlock-test-repo"
+git_user_name  = "arbiter-bot"
+git_user_email = "123456+arbiter-bot[bot]@users.noreply.github.com"
 
 boxes = {
   box-a = { teams = ["GEN", "KAN"] }
