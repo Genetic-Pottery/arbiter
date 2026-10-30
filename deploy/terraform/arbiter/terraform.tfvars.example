@@ -1,0 +1,8 @@
+git_user_name      = "Ada Lovelace"
+git_user_email     = "ada@example.com"
+tailscale_auth_key = "tskey-auth-..."
+project_repo       = "Genetic-Pottery/warlock-test-repo"
+
+# aws_region  = "us-east-1"
+# aws_profile = "default"
+# arbiter_ref = "main"

@@ -1,0 +1,24 @@
+# Terraform working directory and provider cache
+.terraform/
+
+# State holds your Tailscale auth key, git identity, and resource IDs
+*.tfstate
+*.tfstate.*
+
+# Your values; the example stays committed
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Saved plans hold variable values in plain text
+tfplan
+*.tfplan
+
+# Local overrides
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+crash.log
+crash.*.log

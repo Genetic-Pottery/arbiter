@@ -1,0 +1,14 @@
+project_repo          = "Genetic-Pottery/warlock-test-repo"
+github_app_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:arbiter-github-app-AbCdEf"
+git_user_name         = "arbiter-bot"
+git_user_email        = "123456+arbiter-bot[bot]@users.noreply.github.com"
+
+boxes = {
+  box-a = { teams = ["GEN", "KAN"] }
+  box-b = { teams = ["WAR"], instance_type = "t3.large", allowed_tools = ["Bash(go:*)"] }
+}
+
+# Tools every box may use beyond read, search, subagents, git, gh, and python3.
+# allowed_tools = ["Bash(npm:*)"]
+
+# claude_model = "us.anthropic.claude-sonnet-5-5-v1:0"

@@ -1,0 +1,27 @@
+#!/bin/sh
+# First boot on the NixOS AMI. The amazon-init service runs this once, then the
+# flake turns amazon-init off. Read the log with `journalctl -u amazon-init`.
+set -eux
+
+mkdir -p /etc/nixos
+%{ for name, content in nix_files ~}
+echo '${content}' | base64 -d > /etc/nixos/${name}
+%{ endfor ~}
+echo '${box_json}' | base64 -d > /etc/nixos/box.json
+
+%{ if tailscale_authkey != "" ~}
+# Read once by tailscaled-autoconnect to join the tailnet. The key is one-time,
+# so it's spent after first boot.
+(umask 077; echo '${tailscale_authkey}' | base64 -d > /var/lib/tailscale-authkey)
+%{ endif ~}
+
+# Swap before the first build; the flake keeps the same file as swap afterward.
+if [ ! -e /var/lib/swapfile ]; then
+  fallocate -l 4096M /var/lib/swapfile
+  chmod 600 /var/lib/swapfile
+  mkswap /var/lib/swapfile
+  swapon /var/lib/swapfile
+fi
+
+export NIX_CONFIG="experimental-features = nix-command flakes"
+nixos-rebuild switch --flake /etc/nixos#${role}

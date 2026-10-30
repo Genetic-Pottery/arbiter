@@ -102,6 +102,11 @@ plan comment. Three pauses in a row halt the ticket.
 To check the service from a terminal, run `python3 -m arbiter teams` or
 `python3 -m arbiter events`.
 
+## Deploy
+
+To run arbiter on AWS, with an arbiter box you reach from the Claude app and
+worker boxes on Bedrock, see [deploy/README.md](deploy/README.md).
+
 ## HTTP API
 
 The arbiter service listens on port 8700 by default.
