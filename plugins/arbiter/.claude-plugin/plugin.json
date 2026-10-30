@@ -1,0 +1,8 @@
+{
+  "name": "arbiter",
+  "version": "0.1.0",
+  "description": "Front door for team boxes: dispatch tracker tickets to the box that owns each team, and write what the boxes report back to the tracker.",
+  "author": { "name": "Cole Michaels" },
+  "license": "Apache-2.0",
+  "keywords": ["warlock", "routing", "linear", "jira"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "worker",
+  "version": "0.1.0",
+  "description": "Work a ticket the arbiter hands over and report progress as events. The box never touches the tracker.",
+  "author": { "name": "Cole Michaels" },
+  "license": "Apache-2.0",
+  "keywords": ["warlock", "worker"]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "arbiter",
+  "description": "One front door that routes work to Claude sessions on team boxes.",
+  "owner": {
+    "name": "Genetic-Pottery"
+  },
+  "plugins": [
+    {
+      "name": "arbiter",
+      "source": "./plugins/arbiter",
+      "description": "Front door: dispatch tracker tickets to team boxes and record what they report."
+    },
+    {
+      "name": "worker",
+      "source": "./plugins/worker",
+      "description": "Box side: work a ticket handed over by the arbiter, with no tracker access."
+    }
+  ]
+}
