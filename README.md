@@ -1,10 +1,13 @@
 # arbiter
 
-Arbiter is one front door for a team of Claude boxes. You talk to one Claude
-session, the *arbiter session*, from the Claude app. It turns your requests
-into tracker tickets with [Warlock](https://github.com/Genetic-Pottery/warlock),
-hands each ticket to the box that owns its team, and writes what the boxes
-report back to the tracker.
+Arbiter drives an organization's work through one Claude session. You talk to
+the *arbiter session* from the Claude app, by voice if you like. It turns what
+you say into tracker tickets, hands each one to the Claude box that owns that
+team, and writes what the boxes report back to the tracker. Boxes work in
+parallel and come back with a pull request or a question for you.
+
+Arbiter builds on [Warlock](https://github.com/Genetic-Pottery/warlock): teams
+are Warlock scopes, and boxes work tickets the way `/warlock:pull` does.
 
 Only the arbiter session touches the tracker. Boxes get each ticket's full
 contents in the dispatch, and report progress as events. A box needs a model
