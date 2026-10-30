@@ -98,8 +98,10 @@ plan comment. Three pauses in a row halt the ticket.
    To drive it from the Claude app, start it with Remote Control.
 
 4. Run `/arbiter:watch`. It starts a background monitor that wakes the session
-   whenever a box reports, and runs `/arbiter:sync`. Without it, run
-   `/arbiter:sync` yourself, or use `/loop 5m /arbiter:sync`.
+   whenever a box reports or a `warlock` pull request merges, and runs
+   `/arbiter:sync`. Sync moves a merged ticket to done, which releases the
+   tickets it blocks. Without the watch, run `/arbiter:sync` yourself, or use
+   `/loop 5m /arbiter:sync`.
 5. Ask for work.
 
 To check the service from a terminal, run `python3 -m arbiter teams` or

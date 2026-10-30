@@ -210,29 +210,50 @@ class EndToEndTest(unittest.TestCase):
         post_json(f"{self.arbiter_url}/events/ack", {"ids": [e["id"] for e in events]})
         self.assertEqual(get_json(f"{self.arbiter_url}/events")["events"], [])
 
-    def test_watch_prints_once_per_new_batch(self) -> None:
-        watch = ROOT / "plugins" / "arbiter" / "scripts" / "watch.py"
+    def start_watch(self, prs: list[dict]) -> subprocess.Popen:
+        prs_file = Path(self.tmp.name) / "prs.json"
+        prs_file.write_text(json.dumps(prs))
         proc = subprocess.Popen(
-            [sys.executable, str(watch), "0.05"],
+            [sys.executable, str(ROOT / "plugins" / "arbiter" / "scripts" / "watch.py"), "0.05", "0.05"],
             stdout=subprocess.PIPE,
             text=True,
-            env={"ARBITER_URL": self.arbiter_url},
+            env={
+                "ARBITER_URL": self.arbiter_url,
+                # tests/bin comes first, so its gh wins; the fake needs python3.
+                "PATH": f"{ROOT / 'tests' / 'bin'}:{Path(sys.executable).parent}",
+                "FAKE_GH_PRS": str(prs_file),
+            },
         )
-        try:
-            self.dispatch("DB", "DB-7")
-            first = proc.stdout.readline()
-            self.assertIn("DB-7", first)
-            self.assertIn("/arbiter:sync", first)
-            self.wait_for_exit("DB-7")
-            # Later events arrive as later lines; acked ones are never repeated.
-            lines = [first]
-            while not any("exited" in line for line in lines):
-                lines.append(proc.stdout.readline())
-            self.assertEqual(sum(line.count("DB-7 plan") for line in lines), 1)
-        finally:
-            proc.kill()
-            proc.wait()
-            proc.stdout.close()
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        return proc
+
+    def test_watch_prints_once_per_new_batch(self) -> None:
+        proc = self.start_watch([])
+        self.dispatch("DB", "DB-7")
+        first = proc.stdout.readline()
+        self.assertIn("DB-7", first)
+        self.assertIn("/arbiter:sync", first)
+        self.wait_for_exit("DB-7")
+        # Later events arrive as later lines; acked ones are never repeated.
+        lines = [first]
+        while not any("exited" in line for line in lines):
+            lines.append(proc.stdout.readline())
+        self.assertEqual(sum(line.count("DB-7 plan") for line in lines), 1)
+
+    def test_watch_reports_each_merge_after_it_started_once(self) -> None:
+        proc = self.start_watch([
+            {"number": 1, "title": "GEN-1: Old", "mergedAt": "2000-01-01T00:00:00Z"},
+            {"number": 2, "title": "GEN-2: New", "mergedAt": "2999-01-01T00:00:00Z"},
+        ])
+        line = proc.stdout.readline()
+        self.assertIn("#2 GEN-2: New", line)
+        self.assertNotIn("#1", line)
+        self.assertIn("/arbiter:sync", line)
+        # The same merge on later polls prints nothing more.
+        self.dispatch("DB", "DB-8")
+        self.assertIn("DB-8", proc.stdout.readline())
 
     def test_mcp_server_lists_teams_and_tools(self) -> None:
         messages = [

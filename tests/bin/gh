@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Stands in for gh in tests: `gh pr list` prints the file at FAKE_GH_PRS."""
+
+import os
+import sys
+
+if sys.argv[1:3] != ["pr", "list"]:
+    sys.exit(f"fake gh: unsupported: {sys.argv[1:]}")
+with open(os.environ["FAKE_GH_PRS"]) as f:
+    sys.stdout.write(f.read())

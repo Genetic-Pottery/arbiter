@@ -24,7 +24,7 @@ sync retries it.
 | `progress` | Edit the ticket's newest comment starting `Warlock plan` to the body. If you can't edit it, comment the body. |
 | `done` | Comment the body. Move the ticket to `review_state`. If the ticket belongs to a project or epic and every ticket in it is now in `review_state` or finished, move the project or epic to `project_review_state`. |
 | `paused` | Comment the body. Leave the ticket in `start_state`. |
-| `halted` | Comment the body. Move the ticket back to an unstarted state. Keep the ticket for step 3. |
+| `halted` | Comment the body. Move the ticket back to an unstarted state. Keep the ticket for step 4. |
 | `exited` | See below. |
 
 An `exited` event means the run's process ended. Its body is JSON with
@@ -68,12 +68,35 @@ that appears.
 1. If the ticket's newest two comments starting `Warlock` are both
    `Warlock paused:`, this is the third in a row. Comment `Warlock halted:` with
    the three reasons, move the ticket to an unstarted state, and keep it for
-   step 3.
+   step 4.
 2. Otherwise comment `Warlock paused:` and the reason. Say that the next
    dispatch resumes from the plan comment, or starts over when there's none.
    Leave the ticket in `start_state`.
 
-## 3. Bring questions to the person
+## 3. Finish merged tickets
+
+A ticket in `review_state` waits on a person to merge its pull request. A
+`blocked by` link counts only a finished ticket, so until the merged ticket
+moves on, the tickets it blocks stay out of the queue. Some trackers move a
+ticket when its pull request merges, but not into a project branch, and not
+without their GitHub integration. Move it here.
+
+For each non-shared scope, list the tickets in `review_state` that carry
+`label` and are assigned to you. For each, find the pull request: the first
+line of the newest comment that holds a pull request URL. Run
+`gh pr view <url> --json state`:
+
+- `MERGED`: move the ticket to a finished state, Linear's `completed` type or
+  Jira's status category Done. If its project or epic has every ticket
+  finished, leave the project or epic as it is and tell the person: a project
+  branch still needs its own pull request into `base`.
+- `CLOSED`: leave the ticket, and tell the person the pull request closed
+  without merging.
+- `OPEN`, or no pull request found: leave the ticket.
+
+If `gh` fails, say so and go on: the next sync checks again.
+
+## 4. Bring questions to the person
 
 For each halted ticket, tell the person the ticket key, title, link, and the
 reason. The link is the ticket's tracker URL, not the repository. When the body
@@ -89,13 +112,13 @@ When the person answers:
    date. Leave the rest of the description as it is.
 3. Run `/arbiter:dispatch <ticket key>` so the box resumes with the answer.
 
-## 4. Dispatch
+## 5. Dispatch
 
-Run `/arbiter:dispatch`, so idle teams take their next tickets. A `done` ticket
-may have unblocked another team's ticket.
+Run `/arbiter:dispatch`, so idle teams take their next tickets. A ticket
+finished in step 3 may have unblocked another ticket.
 
-## 5. Reply
+## 6. Reply
 
-Lead with the questions from step 3, if any. Then one line per ticket that
+Lead with the questions from step 4, if any. Then one line per ticket that
 changed: key, what happened, and the pull request link for `done`. Link a
 ticket with its tracker URL. If nothing happened, say so in one line.
