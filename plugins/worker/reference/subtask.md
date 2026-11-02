@@ -19,6 +19,18 @@ changed.
 
 Leave the changes uncommitted. The orchestrator checks and commits them.
 
+## Tools
+
+Change files with Edit and Write only, never with the shell: no `cat >`,
+`tee`, `echo >>`, `sed -i`, or heredocs into files. The box runs headless, so
+Bash allows only the commands on its allowlist, such as `git`, `python3`, and
+the project's build and test commands, and denies the rest without asking
+anyone.
+
+Run each command on its own, and pass paths to it instead of chaining
+commands where you can. If a command you need is denied, report `blocked` and
+name the command.
+
 ## The scope
 
 When the box runs the warlock plugin, its gate refuses writes outside the

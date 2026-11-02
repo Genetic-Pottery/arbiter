@@ -7,7 +7,7 @@ boxes = {
   box-b = { teams = ["WAR"], instance_type = "t3.large", allowed_tools = ["Bash(go:*)"] }
 }
 
-# Tools every box may use beyond read, search, subagents, git, gh, and python3.
+# Tools every box may use beyond read, search, subagents, cd, git, gh, and python3.
 # allowed_tools = ["Bash(npm:*)"]
 
 # claude_model = "us.anthropic.claude-sonnet-5-5-v1:0"

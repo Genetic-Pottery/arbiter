@@ -138,7 +138,9 @@ in
             > /run/arbiter/github-app.json
         '')
       ];
-      WorkingDirectory = arbiterCheckout;
+      # ExecStartPre runs in this directory too, before the clone creates it.
+      # The "-" lets those steps run anyway; ExecStart then finds it.
+      WorkingDirectory = "-${arbiterCheckout}";
       ExecStart = lib.concatStringsSep " " [
         "${pkgs.python3}/bin/python3 -m arbiter serve"
         "--host 0.0.0.0 --port ${toString box.arbiter_port}"

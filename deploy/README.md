@@ -127,6 +127,28 @@ To change the fleet, edit `boxes` and apply again:
 - **Move a team:** Terraform replaces the boxes whose teams changed, because
   their teams are part of the first-boot configuration.
 
+### Use the Claude API instead of Bedrock
+
+Workers run Claude on Bedrock by default. To use an Anthropic API key instead,
+for example while a new AWS account waits for Bedrock access, do the following:
+
+1. In the Claude Console, create an API key.
+2. Store it in Secrets Manager as plain text:
+
+   ```sh
+   read -rsp 'API key: ' K && printf %s "$K" | aws secretsmanager create-secret \
+     --region us-east-1 --name arbiter-anthropic-api-key \
+     --secret-string file:///dev/stdin --query ARN --output text; unset K
+   ```
+
+3. In `terraform/boxes/terraform.tfvars`, set `anthropic_api_key_secret_arn`
+   to the secret's ARN, and set `claude_model` to a Claude API model ID such as
+   `claude-sonnet-5-5`.
+
+Each worker box reads the key when its agent starts. Only worker boxes can read
+the secret. To rotate the key, store the new one with
+`aws secretsmanager put-secret-value` and restart the `arbiter-box` service.
+
 ## Limits
 
 - The arbiter service has no authentication. The security groups are its only

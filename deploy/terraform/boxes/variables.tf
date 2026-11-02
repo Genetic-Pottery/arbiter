@@ -61,13 +61,19 @@ variable "name" {
 }
 
 variable "claude_model" {
-  description = "Bedrock model or inference profile ID for Claude Code. Null uses Claude Code's default for Bedrock."
+  description = "Model for Claude Code. On Bedrock, a model or inference profile ID; with an API key, a Claude API model ID such as claude-sonnet-5-5. Null uses Claude Code's default."
+  type        = string
+  default     = null
+}
+
+variable "anthropic_api_key_secret_arn" {
+  description = "Secrets Manager secret holding an Anthropic API key as plain text. Set it to run Claude on the Claude API instead of Bedrock. Null uses Bedrock."
   type        = string
   default     = null
 }
 
 variable "allowed_tools" {
-  description = "Tools every box's Claude runs may use beyond the defaults (read, search, subagents, git, gh, python3), for example [\"Bash(npm:*)\"]. Add your build and test commands."
+  description = "Tools every box's Claude runs may use beyond the defaults (read, search, subagents, cd, git, gh, python3), for example [\"Bash(npm:*)\"]. Add your build and test commands."
   type        = list(string)
   default     = []
 }

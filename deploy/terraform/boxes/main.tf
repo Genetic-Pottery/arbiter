@@ -73,6 +73,21 @@ resource "aws_iam_role_policy" "worker" {
   })
 }
 
+# With an API key in place of Bedrock, the box reads that one secret at start.
+resource "aws_iam_role_policy" "worker_api_key" {
+  count = var.anthropic_api_key_secret_arn == null ? 0 : 1
+  name  = "anthropic-api-key"
+  role  = aws_iam_role.worker.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = var.anthropic_api_key_secret_arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "worker_ssm" {
   role       = aws_iam_role.worker.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -109,5 +124,10 @@ module "box" {
     aws_region     = local.arbiter.aws_region
     claude_model   = var.claude_model
     allowed_tools  = concat(var.allowed_tools, each.value.allowed_tools)
+
+    anthropic_api_key_secret_arn = var.anthropic_api_key_secret_arn
   }
+
+  # The policy must exist before the box asks for the key.
+  depends_on = [aws_iam_role_policy.worker_api_key]
 }

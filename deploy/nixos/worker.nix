@@ -1,5 +1,6 @@
 # A worker box: the box agent and the team checkouts it works in. Nothing on
-# it needs a person. Claude runs on Bedrock through the instance's IAM role.
+# it needs a person. Claude runs on Bedrock through the instance's IAM role,
+# or on the Claude API with a key the box reads from Secrets Manager.
 # GitHub access comes from the arbiter as hour-long tokens for the project
 # repository; the box never sees the GitHub App's key.
 {
@@ -13,6 +14,9 @@ let
   home = "/home/${box.username}";
   arbiterCheckout = "/var/lib/arbiter-box/arbiter";
   warlockCheckout = "/var/lib/arbiter-box/warlock";
+
+  # An API key from Secrets Manager replaces Bedrock when Terraform sets one.
+  useApiKey = (box.anthropic_api_key_secret_arn or null) != null;
 
   # Flags for every headless Claude run. The worker plugin does the work; the
   # warlock plugin's hooks keep it inside the ticket's scope.
@@ -29,6 +33,9 @@ let
         "Grep"
         "Glob"
         "Agent"
+        # Test plans often start with `cd dir && ...`. Claude Code checks each
+        # part of a compound command, so `cd` needs its own rule.
+        "Bash(cd:*)"
         "Bash(git:*)"
         "Bash(gh:*)"
         "Bash(python3:*)"
@@ -61,6 +68,11 @@ let
     clone() { [ -d "$2/.git" ] || git clone --branch "$3" "$1" "$2"; }
     clone '${box.arbiter_repo}' ${arbiterCheckout} '${box.arbiter_ref}'
     clone 'https://github.com/Genetic-Pottery/warlock.git' ${warlockCheckout} '${box.warlock_ref}'
+    ${lib.optionalString useApiKey ''
+      ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value --region '${box.aws_region}' \
+        --secret-id '${box.anthropic_api_key_secret_arn}' --query SecretString --output text)
+      export ANTHROPIC_API_KEY
+    ''}
 
     teams=()
     for team in ${lib.escapeShellArgs box.teams}; do
@@ -86,9 +98,9 @@ let
 
   claudeEnv = {
     HOME = home;
-    CLAUDE_CODE_USE_BEDROCK = "1";
     AWS_REGION = box.aws_region;
   }
+  // lib.optionalAttrs (!useApiKey) { CLAUDE_CODE_USE_BEDROCK = "1"; }
   // lib.optionalAttrs (box.claude_model != null) { ANTHROPIC_MODEL = box.claude_model; };
 in
 {
