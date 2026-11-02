@@ -3,8 +3,11 @@
 Usage: watch.py [interval-seconds [merge-interval-seconds]]
 Polls the arbiter service at ARBITER_URL (default http://127.0.0.1:8700) for
 events the boxes report, and the current directory's GitHub repository for
-pull requests labeled `warlock` that merged since the watch started. A merge
-can unblock tickets, so it needs a sync as much as an event does. Each line
+pull requests that merged since the watch started: those labeled `warlock`,
+and those from a project branch, the branch warlock pull requests target
+instead of the default branch. A ticket's merge can unblock tickets, and a
+project branch's merge finishes its project, so each needs a sync as much as
+an event does. Each line
 names what happened, so the session knows to run /arbiter:sync. Prints nothing
 while nothing happens, and never exits on its own.
 """
@@ -25,13 +28,29 @@ def pending() -> list[dict]:
         return json.loads(resp.read())["events"]
 
 
-def merged() -> list[dict]:
+def gh_prs(*args: str) -> list[dict]:
     out = subprocess.run(
-        ["gh", "pr", "list", "--state", "merged", "--label", "warlock",
-         "--json", "number,title,mergedAt", "--limit", "30"],
-        capture_output=True, text=True, timeout=60, check=True,
+        ["gh", "pr", "list", *args], capture_output=True, text=True, timeout=60, check=True,
     ).stdout
     return json.loads(out)
+
+
+def merged() -> list[dict]:
+    """Merged pull requests labeled `warlock` or opened from a project branch."""
+    fields = "number,title,mergedAt,headRefName,labels"
+    tickets = gh_prs("--state", "all", "--label", "warlock",
+                     "--json", "baseRefName", "--limit", "100")
+    default = subprocess.run(
+        ["gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+        capture_output=True, text=True, timeout=60, check=True,
+    ).stdout.strip()
+    project_branches = {pr["baseRefName"] for pr in tickets} - {default}
+    prs = gh_prs("--state", "merged", "--json", fields, "--limit", "30")
+    return [
+        pr for pr in prs
+        if pr["headRefName"] in project_branches
+        or any(label["name"] == "warlock" for label in pr["labels"])
+    ]
 
 
 def main(argv: list[str]) -> int:

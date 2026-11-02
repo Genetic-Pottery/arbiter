@@ -13,9 +13,10 @@ running `/arbiter:sync` by hand.
    - description: `arbiter events`
    - timeout_ms: `1800000`, the longest a monitor runs
 
-   The script prints a line only when boxes report new events or a pull
-   request labeled `warlock` merges, so a quiet watch costs nothing. It checks
-   for merges with `gh` in the working directory's repository once a minute.
+   The script prints a line only when boxes report new events, or when a pull
+   request labeled `warlock` or one from a project branch merges, so a quiet
+   watch costs nothing. It checks for merges with `gh` in the working
+   directory's repository once a minute.
 3. Reply in one line: the watch is on, and you'll sync when boxes report.
 
 When a monitor line arrives:

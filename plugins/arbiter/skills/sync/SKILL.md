@@ -88,11 +88,21 @@ line of the newest comment that holds a pull request URL. Run
 
 - `MERGED`: move the ticket to a finished state, Linear's `completed` type or
   Jira's status category Done. If its project or epic has every ticket
-  finished, leave the project or epic as it is and tell the person: a project
-  branch still needs its own pull request into `base`.
+  finished, finish the project as described next.
 - `CLOSED`: leave the ticket, and tell the person the pull request closed
   without merging.
 - `OPEN`, or no pull request found: leave the ticket.
+
+Then, for each project or epic whose tickets are all finished but which isn't
+finished itself, find its project branch, from the `## Project branch` section
+of its tickets' descriptions. Run
+`gh pr list --head <branch> --base <base> --state all --json url,state`:
+
+- a merged pull request: move the project to Linear's `completed` status, or
+  the epic to Jira's status category Done.
+- an open pull request: leave the project.
+- none: leave the project, and tell the person that the project branch
+  needs its own pull request into `base`.
 
 If `gh` fails, say so and go on: the next sync checks again.
 
