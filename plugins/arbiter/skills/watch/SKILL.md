@@ -15,8 +15,8 @@ running `/arbiter:sync` by hand.
 
    The script prints a line only when boxes report new events, or when a pull
    request labeled `warlock` or one from a project branch merges, so a quiet
-   watch costs nothing. It checks for merges with `gh` in the working
-   directory's repository once a minute.
+   watch costs nothing. It checks for merges with `gh` once a minute, in each
+   repository checkout, as `/arbiter:dispatch` describes.
 3. Reply in one line: the watch is on, and you'll sync when boxes report.
 
 When a monitor line arrives:

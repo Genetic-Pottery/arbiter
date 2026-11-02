@@ -21,13 +21,23 @@ variable "tailscale_auth_key" {
   }
 }
 
-variable "project_repo" {
-  description = "GitHub repository the teams work on, as OWNER/NAME. It must have .warlock/scopes.toml."
-  type        = string
+variable "repos" {
+  description = "GitHub repositories the teams work in, as OWNER/NAME. Each must have .warlock/scopes.toml, and the GitHub App must be installed on each. One installation covers one owner, so they all share it."
+  type        = list(string)
 
   validation {
-    condition     = length(split("/", var.project_repo)) == 2
-    error_message = "project_repo must be OWNER/NAME, for example Genetic-Pottery/app."
+    condition     = length(var.repos) > 0 && alltrue([for r in var.repos : length(split("/", r)) == 2])
+    error_message = "repos must list at least one OWNER/NAME, for example [\"Genetic-Pottery/app\"]."
+  }
+
+  validation {
+    condition     = length(distinct([for r in var.repos : split("/", r)[0]])) <= 1
+    error_message = "Every repository must have the same owner: the GitHub App's installation covers one."
+  }
+
+  validation {
+    condition     = length(distinct([for r in var.repos : split("/", r)[1]])) == length(var.repos)
+    error_message = "Each repository needs its own name: the arbiter box clones them side by side."
   }
 }
 

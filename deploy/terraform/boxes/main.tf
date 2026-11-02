@@ -37,6 +37,21 @@ locals {
   arbiter = data.terraform_remote_state.arbiter.outputs
 }
 
+# Checks the teams before any box is built from them.
+resource "terraform_data" "teams" {
+  lifecycle {
+    precondition {
+      condition     = alltrue([for b in values(var.boxes) : alltrue([for t in b.teams : contains(keys(var.teams), t)])])
+      error_message = "Every team a box lists needs an entry in `teams` with its repository."
+    }
+    precondition {
+      # An arbiter state from before `repos` existed has no such output.
+      condition     = try(local.arbiter.repos, null) == null || alltrue([for repo in values(var.teams) : contains(local.arbiter.repos, repo)])
+      error_message = "Every repository in `teams` must be in the arbiter state's `repos`, or the arbiter refuses the box a token for it."
+    }
+  }
+}
+
 # Claude on Bedrock and Session Manager. Nothing else: GitHub access comes as
 # hour-long tokens from the arbiter service, never the App's key.
 resource "aws_iam_role" "worker" {
@@ -117,8 +132,7 @@ module "box" {
     arbiter_repo   = var.arbiter_repo
     arbiter_ref    = var.arbiter_ref
     warlock_ref    = var.warlock_ref
-    project_repo   = var.project_repo
-    teams          = each.value.teams
+    teams          = { for team in each.value.teams : team => lookup(var.teams, team, null) }
     arbiter_url    = local.arbiter.arbiter_url
     box_port       = local.arbiter.box_port
     aws_region     = local.arbiter.aws_region
@@ -129,5 +143,5 @@ module "box" {
   }
 
   # The policy must exist before the box asks for the key.
-  depends_on = [aws_iam_role_policy.worker_api_key]
+  depends_on = [aws_iam_role_policy.worker_api_key, terraform_data.teams]
 }

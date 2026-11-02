@@ -9,7 +9,8 @@ operations: find an operation with `discover`, then run it with `executeRead` or
 `executeWrite`. Every Jira call needs the site's cloud id, which
 `getAccessibleAtlassianResources` returns.
 
-Every operation uses the scope's `team` and `label` from `.warlock/scopes.toml`.
+Every operation uses the scope's `team` and `label` from its checkout's
+`.warlock/scopes.toml`.
 If the server for a scope's `tracker` isn't connected, stop and tell the person
 to add it:
 

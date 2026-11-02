@@ -22,26 +22,33 @@ REFRESH_BEFORE = 25 * 60
 
 
 class TokenIssuer:
-    """Mints installation tokens scoped to one repository, and reuses each until it nears expiry."""
+    """Mints installation tokens scoped to the repositories a box asks for, and reuses each until it nears expiry.
+
+    A box gets only repositories in `repos`, the ones the App's installation
+    covers and the arbiter serves. One installation belongs to one owner, so
+    every repository must share it.
+    """
 
     def __init__(
         self,
         app_id: str,
         installation_id: str,
         private_key: str,
-        repo: str,
+        repos: list[str],
         api_url: str = "https://api.github.com",
         clock: Callable[[], float] = time.time,
     ):
+        owners = {repo.partition("/")[0] for repo in repos}
+        if not repos or len(owners) != 1 or any(repo.count("/") != 1 for repo in repos):
+            raise ValueError(f"repositories must be OWNER/NAME with one owner, got {repos}")
         self.app_id = app_id
         self.installation_id = installation_id
-        # Only the repository's name: the installation already fixes the owner.
-        self.repo = repo.rsplit("/", 1)[-1]
+        self.repos = frozenset(repos)
         self.api_url = api_url.rstrip("/")
         self._clock = clock
         self._lock = threading.Lock()
-        self._cached: dict[str, Any] | None = None
-        self._expires = 0.0
+        # One token per set of repositories, with its expiry.
+        self._cached: dict[frozenset[str], tuple[dict[str, Any], float]] = {}
         # openssl reads the key from a file. Keep it private to this process.
         self._keydir = tempfile.TemporaryDirectory(prefix="arbiter-github-")
         self._key = Path(self._keydir.name) / "app.pem"
@@ -50,29 +57,44 @@ class TokenIssuer:
             f.write(private_key)
 
     @classmethod
-    def from_file(cls, path: Path, repo: str, **kwargs: Any) -> "TokenIssuer":
+    def from_file(cls, path: Path, repos: list[str], **kwargs: Any) -> "TokenIssuer":
         """Reads the App from a JSON file holding `app_id`, `installation_id`, and `private_key`."""
         app = json.loads(path.read_text())
-        return cls(str(app["app_id"]), str(app["installation_id"]), app["private_key"], repo, **kwargs)
+        return cls(str(app["app_id"]), str(app["installation_id"]), app["private_key"], repos, **kwargs)
 
     def close(self) -> None:
         """Deletes the copy of the private key."""
         self._keydir.cleanup()
 
-    def token(self) -> dict[str, Any]:
-        """Returns `{token, expires_at}` for the repository. Raises HttpError if GitHub refuses."""
+    def token(self, repos: list[str]) -> dict[str, Any]:
+        """Returns `{token, expires_at, repos}` for `repos`.
+
+        Raises HttpError 403 for a repository the arbiter doesn't serve, and
+        HttpError with GitHub's reason if GitHub refuses.
+        """
+        wanted = frozenset(repos)
+        if not wanted:
+            raise HttpError(400, "no repositories asked for")
+        if wanted - self.repos:
+            raise HttpError(403, f"the arbiter doesn't serve {', '.join(sorted(wanted - self.repos))}")
         with self._lock:
-            if self._cached is None or self._expires - self._clock() < REFRESH_BEFORE:
-                resp = post_json(
-                    f"{self.api_url}/app/installations/{self.installation_id}/access_tokens",
-                    {"repositories": [self.repo], "permissions": PERMISSIONS},
-                    timeout=30,
-                    headers={"Authorization": f"Bearer {self._jwt()}", "Accept": "application/vnd.github+json"},
-                )
-                self._cached = {"token": resp["token"], "expires_at": resp["expires_at"]}
+            cached = self._cached.get(wanted)
+            if cached is None or cached[1] - self._clock() < REFRESH_BEFORE:
+                try:
+                    resp = post_json(
+                        f"{self.api_url}/app/installations/{self.installation_id}/access_tokens",
+                        # Only the names: the installation already fixes the owner.
+                        {"repositories": sorted(r.partition("/")[2] for r in wanted), "permissions": PERMISSIONS},
+                        timeout=30,
+                        headers={"Authorization": f"Bearer {self._jwt()}", "Accept": "application/vnd.github+json"},
+                    )
+                except HttpError as e:
+                    raise HttpError(e.status, f"GitHub refused a token for {', '.join(sorted(wanted))}: {e}") from None
                 # Python 3.10's fromisoformat doesn't take a trailing Z.
-                self._expires = datetime.fromisoformat(resp["expires_at"].replace("Z", "+00:00")).timestamp()
-            return dict(self._cached)
+                expires = datetime.fromisoformat(resp["expires_at"].replace("Z", "+00:00")).timestamp()
+                cached = ({"token": resp["token"], "expires_at": resp["expires_at"], "repos": sorted(wanted)}, expires)
+                self._cached[wanted] = cached
+            return dict(cached[0])
 
     def _jwt(self) -> str:
         now = int(self._clock())

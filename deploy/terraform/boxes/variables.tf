@@ -1,10 +1,24 @@
 # --- Required ---------------------------------------------------------------
 
+variable "teams" {
+  description = <<-EOT
+    Every team the boxes serve, by tracker key, with the GitHub repository it
+    works in as OWNER/NAME. The key is the prefix on the team's ticket
+    numbers, as in that repository's .warlock/scopes.toml. Several teams can
+    share a repository.
+  EOT
+  type        = map(string)
+
+  validation {
+    condition     = alltrue([for repo in values(var.teams) : length(split("/", repo)) == 2])
+    error_message = "Each team's repository must be OWNER/NAME, for example Genetic-Pottery/app."
+  }
+}
+
 variable "boxes" {
   description = <<-EOT
-    Worker boxes, by name. Each lists the teams it serves, by tracker key: the
-    prefix on the team's ticket numbers, as in .warlock/scopes.toml. A team
-    belongs to one box.
+    Worker boxes, by name. Each lists the teams it serves, by their keys in
+    `teams`. A team belongs to one box.
   EOT
   type = map(object({
     teams               = list(string)
@@ -23,11 +37,6 @@ variable "boxes" {
     condition     = alltrue([for b in values(var.boxes) : length(b.teams) > 0])
     error_message = "Every box needs at least one team."
   }
-}
-
-variable "project_repo" {
-  description = "GitHub repository the teams work on, as OWNER/NAME. Use the same value as the arbiter state."
-  type        = string
 }
 
 variable "git_user_name" {

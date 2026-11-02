@@ -1,8 +1,8 @@
 # A worker box: the box agent and the team checkouts it works in. Nothing on
 # it needs a person. Claude runs on Bedrock through the instance's IAM role,
 # or on the Claude API with a key the box reads from Secrets Manager.
-# GitHub access comes from the arbiter as hour-long tokens for the project
-# repository; the box never sees the GitHub App's key.
+# GitHub access comes from the arbiter as hour-long tokens for its teams'
+# repositories; the box never sees the GitHub App's key.
 {
   lib,
   pkgs,
@@ -59,8 +59,8 @@ let
 
   # Clones arbiter and warlock, which are public, then starts the box agent.
   # The agent gets a GitHub token from the arbiter, logs gh in with it (gh is
-  # git's credential helper), clones the project for each team, and refreshes
-  # the token every 40 minutes.
+  # git's credential helper), clones each team's repository, and refreshes the
+  # token every 40 minutes.
   boxStart = pkgs.writeShellScript "arbiter-box-start" ''
     set -euo pipefail
     export PATH=${claudeTools}:$PATH
@@ -74,10 +74,19 @@ let
       export ANTHROPIC_API_KEY
     ''}
 
-    teams=()
-    for team in ${lib.escapeShellArgs box.teams}; do
-      teams+=(--team "$team=${home}/work/$team")
-    done
+    # Each team works in its own clone of its repository.
+    teams=(${
+      lib.escapeShellArgs (
+        lib.concatLists (
+          lib.mapAttrsToList (team: repo: [
+            "--team"
+            "${team}=${home}/work/${team}"
+            "--repo"
+            "${team}=${repo}"
+          ]) box.teams
+        )
+      )
+    })
 
     # The arbiter reaches this box at its private address.
     imds=http://169.254.169.254/latest
@@ -91,7 +100,6 @@ let
       --advertise "http://$private_ip:${toString box.box_port}" \
       --state-dir /var/lib/arbiter-box/state \
       --warlock-cli ${warlockCheckout}/scripts/warlock.py \
-      --github-repo '${box.project_repo}' \
       --claude-args ${lib.escapeShellArg claudeArgs} \
       "''${teams[@]}"
   '';

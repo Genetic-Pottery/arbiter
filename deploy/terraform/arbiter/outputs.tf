@@ -37,3 +37,8 @@ output "next_steps" {
     Then apply deploy/terraform/boxes.
   EOT
 }
+
+output "repos" {
+  description = "Repositories the arbiter issues GitHub tokens for."
+  value       = var.repos
+}

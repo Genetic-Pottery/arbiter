@@ -1,10 +1,10 @@
 output "boxes" {
-  description = "Each box's instance ID, private address, and teams."
+  description = "Each box's instance ID, private address, and teams with their repositories."
   value = {
     for name, b in module.box : name => {
       instance_id = b.instance_id
       private_ip  = b.private_ip
-      teams       = var.boxes[name].teams
+      teams       = { for team in var.boxes[name].teams : team => lookup(var.teams, team, null) }
     }
   }
 }

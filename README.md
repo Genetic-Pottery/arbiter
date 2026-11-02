@@ -88,8 +88,9 @@ plan comment. Three pauses in a row halt the ticket.
    work needs. Add your test runner to `--allowedTools`. Give each team its own
    clone: a team's run switches branches in its working directory.
 
-3. Start the arbiter session in a repository set up with `/warlock:init`, with
-   both plugins loaded:
+3. Start the arbiter session in a repository set up with `/warlock:init`, or
+   in a folder of such repositories, with both plugins loaded. In a folder, the
+   session reads the teams from every repository in it:
 
    ```sh
    claude --plugin-dir ~/src/warlock --plugin-dir ~/src/arbiter/plugins/arbiter
@@ -98,7 +99,8 @@ plan comment. Three pauses in a row halt the ticket.
    To drive it from the Claude app, start it with Remote Control.
 
 4. Run `/arbiter:watch`. It starts a background monitor that wakes the session
-   whenever a box reports or a `warlock` pull request merges, and runs
+   whenever a box reports, or a `warlock` pull request or a project branch
+   merges, and runs
    `/arbiter:sync`. Sync moves a merged ticket to done, which releases the
    tickets it blocks. Without the watch, run `/arbiter:sync` yourself, or use
    `/loop 5m /arbiter:sync`.
@@ -118,14 +120,14 @@ The arbiter service listens on port 8700 by default.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/register` | `{team, url, ticket}` | `{ok}`. Boxes call it as a heartbeat, with the ticket the team is working or `null`. |
-| `GET` | `/teams` | | `{teams: {team: {url, busy, ticket}}}` |
+| `POST` | `/register` | `{team, url, ticket, repo}` | `{ok}`. Boxes call it as a heartbeat, with the ticket the team is working or `null`, and the team's repository as `OWNER/NAME` or `null`. |
+| `GET` | `/teams` | | `{teams: {team: {url, repo, busy, ticket}}}` |
 | `POST` | `/dispatch` | `{team, ticket}` | `{ok}`, `404` if no live box serves the team, or `409` if the team is busy. |
 | `POST` | `/events` | `{team, ticket, type, body}` | `{id}` |
 | `GET` | `/events` | | `{events: [...]}`, every unacked event, oldest first. |
 | `POST` | `/events/ack` | `{ids}` | `{ok}` |
 | `POST` | `/message` | `{team, speaker, text}` | `{team, reply}` from the team's own Claude session, or `409` while it works a ticket. |
-| `POST` | `/github-token` | `{}` | `{token, expires_at}`, a GitHub App installation token for the project repository. `403` unless the caller's address belongs to a registered box, and `404` unless the service runs with `--github-app`. |
+| `POST` | `/github-token` | `{}` | `{token, expires_at, repos}`, a GitHub App installation token for the repositories of the caller's teams. `403` unless the caller's address belongs to a registered box and the arbiter serves each repository, and `404` unless the service runs with `--github-app`. |
 
 A box listens on port 8701 by default and accepts `POST /dispatch` and
 `POST /message`.
@@ -151,15 +153,18 @@ The arbiter can hold your GitHub App's private key and give boxes hour-long
 tokens, so no box holds a key or a login:
 
 - `serve --github-app FILE --github-repo OWNER/NAME` turns it on. `FILE` is
-  JSON with `app_id`, `installation_id`, and `private_key`. Tokens reach only
-  `OWNER/NAME`, with write access to contents and pull requests. The service
-  runs `openssl` to sign its requests to GitHub.
-- `box --github-repo OWNER/NAME` makes a box get its access from the arbiter.
-  Once its heartbeat registers it, the box logs `gh` in with a token, clones
-  `OWNER/NAME` into each team directory that's missing, and starts taking
-  work. It gets a new token every 40 minutes (`--github-refresh`), and `gh` and
-  git pick it up, runs in progress included. Until the first token arrives,
-  the box answers dispatches with `503`.
+  JSON with `app_id`, `installation_id`, and `private_key`. Repeat
+  `--github-repo` for each repository the teams work in. They must share an
+  owner, since one installation covers one owner. A box's token reaches only
+  its own teams' repositories, with write access to contents and pull
+  requests. The service runs `openssl` to sign its requests to GitHub.
+- `box --repo TEAM=OWNER/NAME`, once for each team, makes a box get its access
+  from the arbiter. Once its heartbeat registers it, the box logs `gh` in with
+  a token, clones each team's repository into its directory if it's missing,
+  and starts taking work. It gets a new token every 40 minutes
+  (`--github-refresh`), and `gh` and git pick it up, runs in progress
+  included. Until the first token arrives, the box answers dispatches with
+  `503` and the reason the last try failed.
 - If the arbiter is down, boxes can't refresh, and their GitHub access ends
   within the hour.
 

@@ -12,13 +12,23 @@ For tracker steps, read `${CLAUDE_PLUGIN_ROOT}/reference/trackers.md`.
 
 ## 1. Read the scopes
 
-Read `.warlock/scopes.toml` in the working directory. If it's missing, stop and
-say that the arbiter session must run in a repository set up with
-`/warlock:init`.
+The session runs in one repository checkout or in a folder of them. The
+checkouts are the working directory when it has `.warlock/scopes.toml`, and
+otherwise each directory in it that has one. If there are none, stop and say
+that the arbiter session must run in a repository set up with `/warlock:init`,
+or in a folder of such repositories.
 
-For each `[[scope]]` that isn't `shared`, note its `name`, `tracker`, and
-`team`, and these settings. A scope's own value wins over the top-level value,
-and a missing setting takes the default:
+For each checkout:
+
+1. Run `git -C <checkout> pull --ff-only`, so you read the current scopes. If
+   it fails, say so and go on with the checkout as it is.
+2. Note its repository, `OWNER/NAME`, from
+   `git -C <checkout> remote get-url origin`.
+3. Read its `.warlock/scopes.toml`.
+
+For each `[[scope]]` that isn't `shared`, note its checkout, `name`,
+`tracker`, and `team`, and these settings. A scope's own value wins over the
+top-level value in its file, and a missing setting takes the default:
 
 | Setting | Default |
 |---|---|
@@ -30,11 +40,16 @@ and a missing setting takes the default:
 
 `project_branches` is top-level only, default `false`.
 
+A team key names one team across every checkout. If two checkouts have a
+scope with the same `team`, stop and say which.
+
 ## 2. Find idle teams
 
 Call the `list_teams` tool. A box registers each team under the team key, so
-match boxes to scopes by `team`. A team is ready when a box serves it and
-`busy` is false. Judge each team on its own: one box can serve several teams,
+match boxes to scopes by `team`. A team is ready when a box serves it, `busy`
+is false, and its `repo` is the repository of the scope's checkout. If the
+`repo` differs, skip the team and say so: its box works in another
+repository. Judge each team on its own: one box can serve several teams,
 and they work their tickets in parallel, so another team's busy ticket on the
 same box doesn't matter.
 

@@ -10,7 +10,8 @@
 
 let
   home = "/home/${box.username}";
-  project = "${home}/Projects/${box.project_name}";
+  # The session runs here, with one checkout per repository the teams work in.
+  projects = "${home}/Projects";
 
   claudeTools = lib.makeBinPath [
     pkgs.claude-code
@@ -23,8 +24,8 @@ let
   # The arbiter service runs from this checkout of the arbiter repository.
   arbiterCheckout = "/var/lib/arbiter/src";
 
-  # Installs the warlock and arbiter plugins, and clones the project the
-  # session works in. Run it once after `gh auth login` and the Claude login.
+  # Installs the warlock and arbiter plugins, and clones each repository the
+  # teams work in. Run it once after `gh auth login` and the Claude login.
   arbiterInstall = pkgs.writeShellScriptBin "arbiter-install" ''
     set -euo pipefail
     export PATH=${claudeTools}:$PATH
@@ -40,10 +41,11 @@ let
         claude plugin install "$p"
       fi
     done
-    if [ ! -d '${project}/.git' ]; then
-      gh repo clone '${box.project_repo}' '${project}'
-    fi
-    echo "Plugins installed and ${box.project_name} cloned. Next, run 'remote-control-enable'."
+    for repo in ${lib.escapeShellArgs box.repos}; do
+      dir='${projects}'/"''${repo#*/}"
+      [ -d "$dir/.git" ] || gh repo clone "$repo" "$dir"
+    done
+    echo "Plugins installed and repositories cloned into ${projects}. Next, run 'remote-control-enable'."
   '';
 
   remoteControlMarker = "${home}/.local/state/arbiter/remote-control";
@@ -51,8 +53,8 @@ let
   remoteControlEnable = pkgs.writeShellScriptBin "remote-control-enable" ''
     set -euo pipefail
     export PATH=${claudeTools}:$PATH
-    cd '${project}'
-    echo "Starting Remote Control in ${project}. Answer its prompts, check that"
+    cd '${projects}'
+    echo "Starting Remote Control in ${projects}. Answer its prompts, check that"
     echo "this box shows up in the Claude app, then press Ctrl-C."
     trap : INT
     claude remote-control || true
@@ -89,7 +91,7 @@ in
 
   networking.firewall.allowedTCPPorts = [ box.arbiter_port ];
 
-  systemd.tmpfiles.rules = [ "d ${home}/Projects 0755 ${box.username} users -" ];
+  systemd.tmpfiles.rules = [ "d ${projects} 0755 ${box.username} users -" ];
 
   environment.systemPackages = [
     arbiterInstall
@@ -141,20 +143,22 @@ in
       # ExecStartPre runs in this directory too, before the clone creates it.
       # The "-" lets those steps run anyway; ExecStart then finds it.
       WorkingDirectory = "-${arbiterCheckout}";
-      ExecStart = lib.concatStringsSep " " [
-        "${pkgs.python3}/bin/python3 -m arbiter serve"
-        "--host 0.0.0.0 --port ${toString box.arbiter_port}"
-        "--events-file /var/lib/arbiter/events.jsonl"
-        "--github-app /run/arbiter/github-app.json"
-        "--github-repo ${box.project_repo}"
-      ];
+      ExecStart = lib.concatStringsSep " " (
+        [
+          "${pkgs.python3}/bin/python3 -m arbiter serve"
+          "--host 0.0.0.0 --port ${toString box.arbiter_port}"
+          "--events-file /var/lib/arbiter/events.jsonl"
+          "--github-app /run/arbiter/github-app.json"
+        ]
+        ++ map (repo: "--github-repo ${repo}") box.repos
+      );
       Restart = "always";
       RestartSec = 5;
     };
   };
 
-  # Sessions from the Claude app start in the project checkout, where
-  # .warlock/scopes.toml names the teams.
+  # Sessions from the Claude app start in the folder of checkouts, where each
+  # repository's .warlock/scopes.toml names its teams.
   systemd.services.remote-control = {
     description = "Claude Code Remote Control server";
     wantedBy = [ "multi-user.target" ];
@@ -171,7 +175,7 @@ in
     environment.HOME = home;
     serviceConfig = {
       User = box.username;
-      WorkingDirectory = project;
+      WorkingDirectory = projects;
       ExecStart = "${pkgs.claude-code}/bin/claude remote-control --spawn same-dir --capacity 2";
       Restart = "always";
       RestartSec = 30;

@@ -141,8 +141,7 @@ module "box" {
     arbiter_repo          = var.arbiter_repo
     arbiter_ref           = var.arbiter_ref
     warlock_ref           = var.warlock_ref
-    project_repo          = var.project_repo
-    project_name          = element(split("/", var.project_repo), 1)
+    repos                 = var.repos
     arbiter_port          = var.arbiter_port
     aws_region            = var.aws_region
     github_app_secret_arn = var.github_app_secret_arn

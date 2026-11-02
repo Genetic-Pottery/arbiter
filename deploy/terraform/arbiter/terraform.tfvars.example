@@ -1,7 +1,7 @@
 git_user_name      = "Ada Lovelace"
 git_user_email     = "ada@example.com"
 tailscale_auth_key = "tskey-auth-..."
-project_repo       = "Genetic-Pottery/warlock-test-repo"
+repos              = ["Genetic-Pottery/warlock-test-repo", "Genetic-Pottery/game"]
 
 github_app_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:arbiter-github-app-AbCdEf"
 

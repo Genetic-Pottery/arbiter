@@ -23,6 +23,9 @@ KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*-\d+$")
 class Session:
     team: str
     workdir: Path
+    # The GitHub repository the team works in, as OWNER/NAME. None when the
+    # box doesn't get GitHub access from the arbiter.
+    repo: str | None = None
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     started: bool = False
     # The ticket this team is working, if any. A team works one ticket at a time,
@@ -42,8 +45,10 @@ class Box:
         state_dir: Path | None = None,
         warlock_cli: Path | None = None,
         gh_cmd: list[str] | None = None,
+        repos: dict[str, str] | None = None,
     ):
-        self.sessions = {team: Session(team, workdir) for team, workdir in teams.items()}
+        repos = repos or {}
+        self.sessions = {team: Session(team, workdir, repos.get(team)) for team, workdir in teams.items()}
         self.arbiter_url = arbiter_url
         self.claude_cmd = claude_cmd or shlex.split(os.environ.get("ARBITER_CLAUDE", "claude"))
         self.claude_args = claude_args or []
@@ -55,13 +60,16 @@ class Box:
         # success when the arbiter issues the box's GitHub access.
         self.ready = threading.Event()
         self.ready.set()
+        # Why the last try at GitHub access failed, for the 503 until it works.
+        self.github_error = ""
 
     def _session(self, team: str) -> Session:
         session = self.sessions.get(team)
         if session is None:
             raise HttpError(404, f"this box doesn't serve team {team!r}")
         if not self.ready.is_set():
-            raise HttpError(503, "this box is still getting GitHub access from the arbiter")
+            reason = f": {self.github_error}" if self.github_error else ""
+            raise HttpError(503, f"this box is still getting GitHub access from the arbiter{reason}")
         return session
 
     def ticket(self, team: str) -> str | None:
@@ -156,7 +164,7 @@ def heartbeat(box_url: str, box: Box, interval: float, stop: threading.Event) ->
             try:
                 post_json(
                     f"{box.arbiter_url}/register",
-                    {"team": team, "url": box_url, "ticket": box.ticket(team)},
+                    {"team": team, "url": box_url, "ticket": box.ticket(team), "repo": box.sessions[team].repo},
                     timeout=5,
                 )
             except HttpError:
@@ -165,26 +173,29 @@ def heartbeat(box_url: str, box: Box, interval: float, stop: threading.Event) ->
             return
 
 
-def github_login(box: Box, repo: str, interval: float, stop: threading.Event, retry: float = 10.0) -> None:
+def github_login(box: Box, interval: float, stop: threading.Event, retry: float = 10.0) -> None:
     """Gets GitHub access from the arbiter, then repeats every `interval` seconds until `stop` is set.
 
     Each round logs gh in with a fresh token from the arbiter, so gh and git
     (which uses gh for credentials) pick it up, runs in progress included. The
-    first round also clones `repo` into each team's missing working directory,
-    then marks the box ready. The arbiter gives tokens only to registered boxes,
-    so a round can fail until the first heartbeat lands; it retries sooner then.
+    token reaches the repositories of this box's teams. The first round also
+    clones each team's repository into its missing working directory, then
+    marks the box ready. The arbiter gives tokens only to registered boxes, so
+    a round can fail until the first heartbeat lands; it retries sooner then.
     """
     while True:
         try:
             token = post_json(f"{box.arbiter_url}/github-token", {}, timeout=60)["token"]
             _run([*box.gh_cmd, "auth", "login", "--with-token"], stdin=token)
             for session in box.sessions.values():
-                if not (session.workdir / ".git").exists():
-                    _run([*box.gh_cmd, "repo", "clone", repo, str(session.workdir)])
+                if session.repo and not (session.workdir / ".git").exists():
+                    _run([*box.gh_cmd, "repo", "clone", session.repo, str(session.workdir)])
+            box.github_error = ""
             box.ready.set()
             wait = interval
         except (HttpError, OSError, subprocess.CalledProcessError) as e:
-            detail = e.stderr.strip() if isinstance(e, subprocess.CalledProcessError) else e
+            detail = e.stderr.strip() if isinstance(e, subprocess.CalledProcessError) else str(e)
+            box.github_error = detail
             print(f"box: can't get GitHub access yet, retrying: {detail}", file=sys.stderr)
             wait = min(retry, interval)
         if stop.wait(wait):

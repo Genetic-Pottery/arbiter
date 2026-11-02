@@ -13,12 +13,18 @@ class Registry:
         self._ttl = ttl
         self._clock = clock
         self._lock = threading.Lock()
-        self._entries: dict[str, tuple[str, str | None, float]] = {}
+        self._entries: dict[str, tuple[str, str | None, str | None, float]] = {}
 
-    def register(self, team: str, url: str, ticket: str | None = None) -> None:
-        """Records that `url` serves `team`, working `ticket` if any. Calling it again counts as a heartbeat."""
+    def register(self, team: str, url: str, ticket: str | None = None, repo: str | None = None) -> None:
+        """Records that `url` serves `team` in `repo`, working `ticket` if any. Calling it again counts as a heartbeat.
+
+        A call without `repo` keeps the repository the team registered with.
+        """
         with self._lock:
-            self._entries[team] = (url, ticket, self._clock())
+            old = self._entries.get(team)
+            if repo is None and old is not None and old[0] == url:
+                repo = old[2]
+            self._entries[team] = (url, ticket, repo, self._clock())
 
     def lookup(self, team: str) -> str | None:
         """Returns the box URL for `team`, or None if no live box serves it."""
@@ -26,7 +32,7 @@ class Registry:
             entry = self._entries.get(team)
             if entry is None:
                 return None
-            url, _, seen = entry
+            url, _, _, seen = entry
             if self._clock() - seen > self._ttl:
                 del self._entries[team]
                 return None
@@ -36,12 +42,20 @@ class Registry:
         """Returns the host of every live box, for telling boxes from other callers."""
         return {urlsplit(info["url"]).hostname or "" for info in self.teams().values()}
 
+    def repos_for(self, host: str) -> set[str]:
+        """Returns the repositories of the live teams whose box is at `host`."""
+        return {
+            info["repo"]
+            for info in self.teams().values()
+            if info["repo"] and urlsplit(str(info["url"])).hostname == host
+        }
+
     def teams(self) -> dict[str, dict[str, object]]:
-        """Returns every live team with its box URL and the ticket it's working, if any."""
+        """Returns every live team with its box URL, repository, and the ticket it's working, if any."""
         with self._lock:
             now = self._clock()
             return {
-                t: {"url": u, "busy": ticket is not None, "ticket": ticket}
-                for t, (u, ticket, seen) in self._entries.items()
+                t: {"url": u, "repo": repo, "busy": ticket is not None, "ticket": ticket}
+                for t, (u, ticket, repo, seen) in self._entries.items()
                 if now - seen <= self._ttl
             }

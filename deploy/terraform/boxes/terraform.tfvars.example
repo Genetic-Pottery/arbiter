@@ -1,6 +1,13 @@
-project_repo   = "Genetic-Pottery/warlock-test-repo"
 git_user_name  = "arbiter-bot"
 git_user_email = "123456+arbiter-bot[bot]@users.noreply.github.com"
+
+# Each team and the repository it works in. The arbiter state's `repos` must
+# list every repository here.
+teams = {
+  GEN = "Genetic-Pottery/warlock-test-repo"
+  KAN = "Genetic-Pottery/warlock-test-repo"
+  WAR = "Genetic-Pottery/game"
+}
 
 boxes = {
   box-a = { teams = ["GEN", "KAN"] }

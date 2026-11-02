@@ -1,8 +1,9 @@
 # Deploy arbiter on AWS
 
 This directory runs arbiter on EC2: one arbiter box, the front door you talk to
-from the Claude app, and any number of worker boxes that work tickets. Every
-box runs NixOS and builds itself from `nixos/` on first boot.
+from the Claude app, and any number of worker boxes that work tickets. The
+teams can work in any number of repositories that one GitHub owner holds.
+Every box runs NixOS and builds itself from `nixos/` on first boot.
 
 The arbiter and the workers live in two Terraform states:
 
@@ -26,7 +27,8 @@ you (Claude app) ── Remote Control ──> arbiter box ── Linear / Jira
 The arbiter box:
 
 - the arbiter service, which restarts on its own
-- Claude Code with Remote Control, started in your project's checkout
+- Claude Code with Remote Control, started in `~/Projects`, which holds a
+  checkout of each repository
 - the warlock and arbiter plugins, installed by `arbiter-install`
 - Tailscale SSH for you, and no open ports except the arbiter service, which
   only worker boxes can reach
@@ -35,11 +37,11 @@ The arbiter box:
 
 Each worker box:
 
-- the box agent, serving the teams you list for it, with one clone of your
-  project per team
+- the box agent, serving the teams you list for it, with one clone of its
+  repository per team
 - Claude Code on Bedrock, through the box's IAM role, so no Claude login
-- an hour-long GitHub token from the arbiter, scoped to your project
-  repository and refreshed every 40 minutes, so no GitHub login and no key.
+- an hour-long GitHub token from the arbiter, scoped to its teams'
+  repositories and refreshed every 40 minutes, so no GitHub login and no key.
   The box can't read the secret.
 - no person logs in. To look around, use Session Manager:
   `aws ssm start-session --target <instance id>`
@@ -51,8 +53,9 @@ You need the following:
 - Terraform 1.6 or later, and AWS credentials the AWS CLI can use.
 - The arbiter repository readable without credentials at `arbiter_repo`. The
   arbiter service clones it on boot, before anyone logs in.
-- A project repository set up with `/warlock:init`, so it has
-  `.warlock/scopes.toml`.
+- One or more project repositories with the same owner, each set up with
+  `/warlock:init`, so it has `.warlock/scopes.toml`. A team key must appear in
+  only one of them.
 - A Claude Pro, Max, Team, or Enterprise plan for the arbiter box's login.
   Remote Control needs it.
 - A Tailscale account, for logging in to the arbiter box.
@@ -70,7 +73,7 @@ Workers push branches and open pull requests as a GitHub App.
    - **Pull requests:** read and write
    - **Metadata:** read-only
 3. Create the app, note its **App ID**, and generate a private key.
-4. Install the app on your project repository. Note the installation ID, the
+4. Install the app on each project repository. Note the installation ID, the
    number at the end of the installation's URL.
 5. Store all three in Secrets Manager:
 
@@ -87,7 +90,8 @@ Workers push branches and open pull requests as a GitHub App.
 
 1. In the Tailscale admin console, generate an auth key.
 2. Copy `terraform/arbiter/terraform.tfvars.example` to `terraform.tfvars`
-   and fill it in, including the secret's ARN as `github_app_secret_arn`.
+   and fill it in. List every project repository in `repos`, and set the
+   secret's ARN as `github_app_secret_arn`.
 3. Apply:
 
    ```sh
@@ -104,9 +108,10 @@ Workers push branches and open pull requests as a GitHub App.
 
 ## Add worker boxes
 
-1. Copy `terraform/boxes/terraform.tfvars.example` to `terraform.tfvars`. Name
-   each team by its tracker key, as in `.warlock/scopes.toml`. A team belongs
-   to one box.
+1. Copy `terraform/boxes/terraform.tfvars.example` to `terraform.tfvars`. In
+   `teams`, map each team's tracker key, as in `.warlock/scopes.toml`, to the
+   repository it works in. In `boxes`, list each box's teams. A team belongs to
+   one box, and one box can serve teams from different repositories.
 2. Apply:
 
    ```sh
@@ -126,6 +131,9 @@ To change the fleet, edit `boxes` and apply again:
   to a box that serves the team resumes it.
 - **Move a team:** Terraform replaces the boxes whose teams changed, because
   their teams are part of the first-boot configuration.
+- **Add a repository:** install the GitHub App on it, add it to `repos` in
+  the arbiter state, and apply that state. This replaces the arbiter box, so
+  follow `next_steps` again. Then add its teams to the boxes state and apply.
 
 ### Use the Claude API instead of Bedrock
 
@@ -157,7 +165,9 @@ the secret. To rotate the key, store the new one with
 - Replacing the arbiter box changes its private address. Apply
   `terraform/boxes` again afterward, which replaces the workers.
 - First-boot files go in EC2 user data, which is capped at 16 KB. The NixOS
-  configuration uses about 13 KB of it.
+  configuration uses about 14 KB of it.
+- The arbiter box's repositories are part of its first-boot configuration, so
+  changing `repos` replaces it, and you log in on it again.
 - Boxes follow `arbiter_ref` and `warlock_ref` only when they're created.
   To update a box, replace it.
 - Workers depend on the arbiter for GitHub access. If the arbiter is down for

@@ -8,8 +8,8 @@ its ticket. The tracker stays the record: a later run resumes from the comments
 you write here.
 
 For tracker steps, read `${CLAUDE_PLUGIN_ROOT}/reference/trackers.md`. Read the
-scope settings from `.warlock/scopes.toml` as `/arbiter:dispatch` describes:
-the scope is the one whose `team` matches the event's `team`.
+scopes from each repository checkout as `/arbiter:dispatch` describes: the
+scope is the one whose `team` matches the event's `team`.
 
 ## 1. Handle events
 
@@ -95,7 +95,7 @@ line of the newest comment that holds a pull request URL. Run
 
 Then, for each project or epic whose tickets are all finished but which isn't
 finished itself, find its project branch, from the `## Project branch` section
-of its tickets' descriptions. Run
+of its tickets' descriptions. In the scope's checkout, run
 `gh pr list --head <branch> --base <base> --state all --json url,state`:
 
 - a merged pull request: move the project to Linear's `completed` status, or

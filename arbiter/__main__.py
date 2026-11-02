@@ -24,6 +24,20 @@ def parse_team(value: str) -> tuple[str, Path]:
     return team, Path(workdir).expanduser().resolve()
 
 
+def parse_repo(value: str) -> str:
+    owner, sep, name = value.partition("/")
+    if not sep or not owner or not name or "/" in name:
+        raise argparse.ArgumentTypeError(f"expected OWNER/NAME, got {value!r}")
+    return value
+
+
+def parse_team_repo(value: str) -> tuple[str, str]:
+    team, sep, repo = value.partition("=")
+    if not sep or not team:
+        raise argparse.ArgumentTypeError("expected TEAM=OWNER/NAME")
+    return team, parse_repo(repo)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="arbiter")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -39,7 +53,13 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FILE",
         help="JSON file with the GitHub App's app_id, installation_id, and private_key; boxes get tokens from it",
     )
-    p.add_argument("--github-repo", metavar="OWNER/NAME", help="the one repository tokens reach; required with --github-app")
+    p.add_argument(
+        "--github-repo",
+        type=parse_repo,
+        action="append",
+        metavar="OWNER/NAME",
+        help="a repository boxes can get tokens for; repeat it for each. Required with --github-app",
+    )
 
     p = sub.add_parser("box", help="run a box agent that works tickets for its teams")
     p.add_argument("--arbiter", default=DEFAULT_ARBITER)
@@ -52,9 +72,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--state-dir", type=Path, help="where ticket payloads are written")
     p.add_argument("--warlock-cli", type=Path, help="path to Warlock's scripts/warlock.py; turns on scope checks")
     p.add_argument(
-        "--github-repo",
-        metavar="OWNER/NAME",
-        help="get GitHub access from the arbiter, and clone this repository into missing team directories",
+        "--repo",
+        type=parse_team_repo,
+        action="append",
+        metavar="TEAM=OWNER/NAME",
+        help="the repository a team works in; repeat it for each team. Turns on GitHub access from the arbiter, "
+        "which clones each repository into its team's missing directory",
     )
     p.add_argument("--github-refresh", type=float, default=40 * 60, help="seconds between GitHub token refreshes")
 
@@ -75,22 +98,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         if bool(args.github_app) != bool(args.github_repo):
             parser.error("--github-app and --github-repo go together")
-        github = TokenIssuer.from_file(args.github_app, args.github_repo) if args.github_app else None
+        try:
+            github = TokenIssuer.from_file(args.github_app, args.github_repo) if args.github_app else None
+        except ValueError as e:
+            parser.error(str(e))
         srv = server.make_server(args.host, args.port, Registry(ttl=args.ttl), EventLog(args.events_file), github)
         print(f"arbiter listening on http://{args.host}:{args.port}", file=sys.stderr)
         srv.serve_forever()
 
     elif args.cmd == "box":
-        if not args.github_repo:
-            for _, workdir in args.team:
+        teams, repos = dict(args.team), dict(args.repo or [])
+        if repos:
+            if missing := sorted(set(teams) - set(repos)):
+                parser.error(f"with --repo, every team needs one; missing: {', '.join(missing)}")
+            if extra := sorted(set(repos) - set(teams)):
+                parser.error(f"--repo names teams without --team: {', '.join(extra)}")
+        else:
+            for workdir in teams.values():
                 if not workdir.is_dir():
                     parser.error(f"not a directory: {workdir}")
         box = box_mod.Box(
-            dict(args.team),
+            teams,
             args.arbiter,
             claude_args=shlex.split(args.claude_args),
             state_dir=args.state_dir,
             warlock_cli=args.warlock_cli,
+            repos=repos,
         )
         srv = box_mod.make_server(args.host, args.port, box)
         url = args.advertise or f"http://{args.host}:{args.port}"
@@ -99,11 +132,11 @@ def main(argv: list[str] | None = None) -> int:
             args=(url, box, args.heartbeat, threading.Event()),
             daemon=True,
         ).start()
-        if args.github_repo:
+        if repos:
             box.ready.clear()
             threading.Thread(
                 target=box_mod.github_login,
-                args=(box, args.github_repo, args.github_refresh, threading.Event()),
+                args=(box, args.github_refresh, threading.Event()),
                 daemon=True,
             ).start()
         print(f"box serving {', '.join(box.sessions)} on {url}", file=sys.stderr)
@@ -116,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(resp["reply"])
             elif args.cmd == "teams":
                 for team, info in sorted(get_json(f"{args.arbiter}/teams")["teams"].items()):
-                    print(f"{team}\t{info['url']}\t{info['ticket'] or 'idle'}")
+                    print(f"{team}\t{info['url']}\t{info.get('repo') or '-'}\t{info['ticket'] or 'idle'}")
             elif args.cmd == "events":
                 print(json.dumps(get_json(f"{args.arbiter}/events")["events"], indent=2))
         except HttpError as e:

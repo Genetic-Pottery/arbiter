@@ -30,8 +30,13 @@ def make_server(
                 return {"teams": registry.teams()}
             if method == "POST" and path == "/register":
                 team, url = require(body, "team", "url")
-                ticket = body.get("ticket")
-                registry.register(team, url, ticket if isinstance(ticket, str) and ticket else None)
+                ticket, repo = body.get("ticket"), body.get("repo")
+                registry.register(
+                    team,
+                    url,
+                    ticket if isinstance(ticket, str) and ticket else None,
+                    repo if isinstance(repo, str) and repo else None,
+                )
                 return {"ok": True}
             if method == "POST" and path == "/message":
                 team, speaker, text = require(body, "team", "speaker", "text")
@@ -42,8 +47,9 @@ def make_server(
                 ticket = body.get("ticket")
                 if not isinstance(ticket, dict) or not ticket.get("key"):
                     raise HttpError(400, "missing field: ticket.key")
-                post_json(f"{box_for(team)}/dispatch", {"team": team, "ticket": ticket}, timeout=30)
-                registry.register(team, box_for(team), ticket["key"])
+                url = box_for(team)
+                post_json(f"{url}/dispatch", {"team": team, "ticket": ticket}, timeout=30)
+                registry.register(team, url, ticket["key"])
                 return {"ok": True, "team": team, "ticket": ticket["key"]}
             if method == "POST" and path == "/events":
                 team, ticket, type_ = require(body, "team", "ticket", "type")
@@ -65,9 +71,14 @@ def make_server(
                     raise HttpError(404, "this arbiter issues no GitHub tokens; start it with --github-app")
                 # Only a registered box gets a token. The security groups keep
                 # anything else off the network; this keeps it off the token.
-                if self.client_address[0] not in registry.hosts():
-                    raise HttpError(403, f"{self.client_address[0]} isn't a registered box")
-                return github.token()
+                host = self.client_address[0]
+                if host not in registry.hosts():
+                    raise HttpError(403, f"{host} isn't a registered box")
+                # The token reaches the repositories of the box's own teams.
+                repos = registry.repos_for(host)
+                if not repos:
+                    raise HttpError(400, f"no team registered from {host} names a repository")
+                return github.token(sorted(repos))
             raise HttpError(404, "not found")
 
     return ThreadingHTTPServer((host, port), Handler)

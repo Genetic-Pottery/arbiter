@@ -68,15 +68,28 @@ class RegistryTest(unittest.TestCase):
 
     def test_teams_reports_ticket(self) -> None:
         reg = Registry()
-        reg.register("ui", "http://box-a", "UI-7")
+        reg.register("ui", "http://box-a", "UI-7", "acme/web")
         reg.register("db", "http://box-a")
         self.assertEqual(
             reg.teams(),
             {
-                "ui": {"url": "http://box-a", "busy": True, "ticket": "UI-7"},
-                "db": {"url": "http://box-a", "busy": False, "ticket": None},
+                "ui": {"url": "http://box-a", "repo": "acme/web", "busy": True, "ticket": "UI-7"},
+                "db": {"url": "http://box-a", "repo": None, "busy": False, "ticket": None},
             },
         )
+
+    def test_heartbeat_without_repo_keeps_it(self) -> None:
+        reg = Registry()
+        reg.register("ui", "http://box-a", None, "acme/web")
+        reg.register("ui", "http://box-a", "UI-7")
+        self.assertEqual(reg.teams()["ui"]["repo"], "acme/web")
+
+    def test_repos_for_lists_one_hosts_repos(self) -> None:
+        reg = Registry()
+        reg.register("ui", "http://10.0.0.1:8701", None, "acme/web")
+        reg.register("db", "http://10.0.0.1:8701", None, "acme/api")
+        reg.register("ops", "http://10.0.0.2:8701", None, "acme/infra")
+        self.assertEqual(reg.repos_for("10.0.0.1"), {"acme/web", "acme/api"})
 
 
 class EventLogTest(unittest.TestCase):
@@ -114,6 +127,8 @@ class FakeGitHub:
             def route(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
                 if method != "POST" or path != "/app/installations/42/access_tokens":
                     raise HttpError(404, "not found")
+                if "locked" in body.get("repositories", []):
+                    raise HttpError(422, "There is at least one repository that does not exist or is not accessible to the parent installation.")
                 jwt = self.headers["Authorization"].removeprefix("Bearer ")
                 signing_input, _, signature = jwt.rpartition(".")
                 with tempfile.NamedTemporaryFile() as sig:
@@ -153,7 +168,9 @@ class GitHubTest(unittest.TestCase):
         self.clock.now = time.time()
         self.github = FakeGitHub(public, self.clock)
         self.addCleanup(self.github.close)
-        self.issuer = TokenIssuer("7", "42", key.read_text(), "acme/shop", api_url=self.github.url, clock=self.clock)
+        self.issuer = TokenIssuer(
+            "7", "42", key.read_text(), ["acme/shop", "acme/api", "acme/locked"], api_url=self.github.url, clock=self.clock
+        )
         self.addCleanup(self.issuer.close)
 
     def start_arbiter(self) -> tuple[Registry, str]:
@@ -164,26 +181,53 @@ class GitHubTest(unittest.TestCase):
         self.addCleanup(arbiter.shutdown)
         return registry, f"http://127.0.0.1:{arbiter.server_address[1]}"
 
-    def test_issuer_signs_as_the_app_and_scopes_to_the_repo(self) -> None:
-        self.assertEqual(self.issuer.token()["token"], "ghs_1")
+    def test_issuer_signs_as_the_app_and_scopes_to_the_repos(self) -> None:
+        token = self.issuer.token(["acme/shop", "acme/api"])
+        self.assertEqual((token["token"], token["repos"]), ("ghs_1", ["acme/api", "acme/shop"]))
         (request,) = self.github.requests
         self.assertEqual(request["claims"]["iss"], "7")
-        self.assertEqual(request["body"], {"repositories": ["shop"], "permissions": PERMISSIONS})
+        self.assertEqual(request["body"], {"repositories": ["api", "shop"], "permissions": PERMISSIONS})
 
     def test_issuer_reuses_a_token_until_it_nears_expiry(self) -> None:
-        self.issuer.token()
+        self.issuer.token(["acme/shop"])
         self.clock.now += 30 * 60
-        self.assertEqual(self.issuer.token()["token"], "ghs_1")
+        self.assertEqual(self.issuer.token(["acme/shop"])["token"], "ghs_1")
         self.clock.now += 10 * 60
-        self.assertEqual(self.issuer.token()["token"], "ghs_2")
+        self.assertEqual(self.issuer.token(["acme/shop"])["token"], "ghs_2")
 
-    def test_arbiter_gives_tokens_only_to_registered_boxes(self) -> None:
+    def test_issuer_keeps_one_token_per_set_of_repos(self) -> None:
+        self.assertEqual(self.issuer.token(["acme/shop"])["token"], "ghs_1")
+        self.assertEqual(self.issuer.token(["acme/api"])["token"], "ghs_2")
+        self.assertEqual(self.issuer.token(["acme/shop"])["token"], "ghs_1")
+
+    def test_issuer_refuses_repos_the_arbiter_doesnt_serve(self) -> None:
+        with self.assertRaises(HttpError) as ctx:
+            self.issuer.token(["acme/shop", "acme/secret"])
+        self.assertEqual(ctx.exception.status, 403)
+        self.assertIn("acme/secret", str(ctx.exception))
+        self.assertEqual(self.github.requests, [])
+
+    def test_issuer_passes_on_githubs_reason(self) -> None:
+        with self.assertRaises(HttpError) as ctx:
+            self.issuer.token(["acme/locked"])
+        self.assertEqual(ctx.exception.status, 422)
+        self.assertIn("acme/locked", str(ctx.exception))
+        self.assertIn("not accessible to the parent installation", str(ctx.exception))
+
+    def test_issuer_needs_one_owner(self) -> None:
+        with self.assertRaises(ValueError):
+            TokenIssuer("7", "42", "key", ["acme/shop", "other/api"])
+
+    def test_arbiter_gives_boxes_tokens_for_their_teams_repos(self) -> None:
         registry, url = self.start_arbiter()
         with self.assertRaises(HttpError) as ctx:
             post_json(f"{url}/github-token", {})
         self.assertEqual(ctx.exception.status, 403)
-        registry.register("DB", "http://127.0.0.1:9")
-        self.assertEqual(post_json(f"{url}/github-token", {})["token"], "ghs_1")
+        registry.register("DB", "http://127.0.0.1:9", None, "acme/shop")
+        registry.register("API", "http://127.0.0.1:9", None, "acme/api")
+        registry.register("WEB", "http://10.9.9.9:9", None, "acme/locked")
+        token = post_json(f"{url}/github-token", {})
+        self.assertEqual((token["token"], token["repos"]), ("ghs_1", ["acme/api", "acme/shop"]))
 
     def test_arbiter_without_an_app_issues_nothing(self) -> None:
         arbiter = server.make_server("127.0.0.1", 0, Registry())
@@ -200,21 +244,35 @@ class GitHubTest(unittest.TestCase):
         log = root / "gh.log"
         os.environ["FAKE_GH_LOG"] = str(log)
         self.addCleanup(os.environ.pop, "FAKE_GH_LOG")
-        box = box_mod.Box({"DB": root / "work" / "DB"}, url, claude_cmd=FAKE_CLAUDE, state_dir=root / "state", gh_cmd=FAKE_GH)
+        box = box_mod.Box(
+            {"DB": root / "work" / "DB", "API": root / "work" / "API"},
+            url,
+            claude_cmd=FAKE_CLAUDE,
+            state_dir=root / "state",
+            gh_cmd=FAKE_GH,
+            repos={"DB": "acme/shop", "API": "acme/api"},
+        )
         box.ready.clear()
+        stop = threading.Event()
+        stop.set()  # One round, no loop.
+
+        # Before the box registers, the arbiter refuses it, and the 503 says why.
+        box_mod.github_login(box, 0, stop)
         with self.assertRaises(HttpError) as ctx:
             box.dispatch("DB", {"key": "DB-1"})
         self.assertEqual(ctx.exception.status, 503)
+        self.assertIn("isn't a registered box", str(ctx.exception))
 
-        stop = threading.Event()
-        stop.set()  # One round, no loop.
         box_mod.heartbeat("http://127.0.0.1:9", box, 0, stop)
-        box_mod.github_login(box, "acme/shop", 0, stop)
+        box_mod.github_login(box, 0, stop)
 
         self.assertTrue(box.ready.is_set())
-        self.assertTrue((root / "work" / "DB" / ".git").is_dir())
-        self.assertEqual(log.read_text().splitlines(), ["login ghs_1", f"clone acme/shop {root / 'work' / 'DB'}"])
-        self.assertEqual(registry.lookup("DB"), "http://127.0.0.1:9")
+        self.assertEqual(box.github_error, "")
+        self.assertEqual(
+            log.read_text().splitlines(),
+            ["login ghs_1", f"clone acme/shop {root / 'work' / 'DB'}", f"clone acme/api {root / 'work' / 'API'}"],
+        )
+        self.assertEqual(registry.teams()["DB"]["repo"], "acme/shop")
 
 
 class EndToEndTest(unittest.TestCase):
@@ -332,8 +390,14 @@ class EndToEndTest(unittest.TestCase):
     def start_watch(self, prs: list[dict]) -> subprocess.Popen:
         prs_file = Path(self.tmp.name) / "prs.json"
         prs_file.write_text(json.dumps(prs))
+        # The session runs in a folder of repository checkouts.
+        projects = Path(self.tmp.name) / "projects"
+        (projects / "shop" / ".warlock").mkdir(parents=True)
+        (projects / "shop" / ".warlock" / "scopes.toml").write_text("")
+        (projects / "notes").mkdir()
         proc = subprocess.Popen(
             [sys.executable, str(ROOT / "plugins" / "arbiter" / "scripts" / "watch.py"), "0.05", "0.05"],
+            cwd=projects,
             stdout=subprocess.PIPE,
             text=True,
             env={
@@ -362,13 +426,24 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(sum(line.count("DB-7 plan") for line in lines), 1)
 
     def test_watch_reports_each_merge_after_it_started_once(self) -> None:
+        warlock = [{"name": "warlock"}]
         proc = self.start_watch([
-            {"number": 1, "title": "GEN-1: Old", "mergedAt": "2000-01-01T00:00:00Z"},
-            {"number": 2, "title": "GEN-2: New", "mergedAt": "2999-01-01T00:00:00Z"},
+            {"number": 1, "title": "GEN-1: Old", "mergedAt": "2000-01-01T00:00:00Z",
+             "headRefName": "gen-1", "baseRefName": "project/p", "labels": warlock},
+            {"number": 2, "title": "GEN-2: New", "mergedAt": "2999-01-01T00:00:00Z",
+             "headRefName": "gen-2", "baseRefName": "project/p", "labels": warlock},
+            {"number": 3, "title": "Project p", "mergedAt": "2999-01-01T00:00:00Z",
+             "headRefName": "project/p", "baseRefName": "main", "labels": []},
+            {"number": 4, "title": "Someone's fix", "mergedAt": "2999-01-01T00:00:00Z",
+             "headRefName": "fix", "baseRefName": "main", "labels": []},
+            {"number": 5, "title": "GEN-5: Open", "mergedAt": None,
+             "headRefName": "gen-5", "baseRefName": "project/q", "labels": warlock},
         ])
         line = proc.stdout.readline()
-        self.assertIn("#2 GEN-2: New", line)
+        self.assertIn("shop#2 GEN-2: New, shop#3 Project p.", line)
         self.assertNotIn("#1", line)
+        self.assertNotIn("#4", line)
+        self.assertNotIn("#5", line)
         self.assertIn("/arbiter:sync", line)
         # The same merge on later polls prints nothing more.
         self.dispatch("DB", "DB-8")
